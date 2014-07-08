@@ -204,6 +204,10 @@ int EATMerge(std::vector<State*>* stack, size_t offset, const EATEntry& entry) {
 
     stack->at(offset)->eat.push_back(new_entry);
 
+    int id = -1;
+    if (stack->at(offset)->schedule.size() > 0)
+        id = stack->at(offset)->schedule.back();
+
     return schedule_offset;
 
 }
