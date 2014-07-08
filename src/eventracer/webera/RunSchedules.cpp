@@ -56,8 +56,8 @@ TraceReorder* reorder;
 
 bool MoveFile(const std::string& file, const std::string& out_dir) {
 	if (system(StringPrintf("mv %s %s", file.c_str(), out_dir.c_str()).c_str()) != 0) {
-		fprintf(stderr, "Cannot move %s\n", file.c_str());
-		return false;
+        fprintf(stderr, "Cannot move %s\n", file.c_str());
+        return false;
 	}
 	return true;
 }
@@ -93,7 +93,6 @@ void createReorders() {
 
 	TraceReorder::Options options;
 	options.include_change_marker = true;
-	options.minimize_variation_from_original = true;
 	options.relax_replay_after_all_races = true;
 
 	int all_schedules = 0;
@@ -102,33 +101,40 @@ void createReorders() {
 
 	std::map<int, int> reversals_per_memory_locations;
 	for (int race_id = -1; race_id < static_cast<int>(vinfo.races().size()); ++race_id) {
-		std::string name;
-		std::vector<int> rev_races;
-		if (race_id == -1) {
+
+        std::string name;
+        std::vector<int> new_schedule;
+
+        ++all_schedules;
+
+        if (race_id == -1) {
 			// Do not reverse any races in this case.
 			name = "base";
+            reorder->GetScheduleWithoutRace(&new_schedule);
+
 		} else {
 			name = StringPrintf("race%d", race_id);
 			const VarsInfo::RaceInfo& race = vinfo.races()[race_id];
 			if (!race.m_multiParentRaces.empty() || race.m_coveredBy != -1) continue;
 			if (reversals_per_memory_locations[race.m_varId]++ >= FLAGS_max_races_per_memory_location) {
+                --all_schedules; // don't count this
 				continue;
-			}
+            }
 
-			// Reverse the current race (and only it).
-			rev_races.push_back(race_id);
+            // Reverse the current race (and only it).
+            if (reorder->GetScheduleFromRace(vinfo, race_id, race_app->graph(), options, &new_schedule)) {
+                ++successful_reverses;
+            } else {
+                continue;
+            }
 		}
+
 		fprintf(stderr, "Reordering \"%s\": ", name.c_str());
 
-		++all_schedules;
-		std::vector<int> new_schedule;
-		if (reorder->GetScheduleFromRaces(vinfo, rev_races, race_app->graph(), options, &new_schedule)) {
-			++successful_reverses;
-			reorder->SaveSchedule(FLAGS_tmp_schedule_file.c_str(), new_schedule);
-			if (performSavedSchedule(name)) {
-				++successful_schedules;
-			}
-		}
+        reorder->SaveSchedule(FLAGS_tmp_schedule_file.c_str(), new_schedule);
+        if (performSavedSchedule(name)) {
+            ++successful_schedules;
+        }
 	}
 
 	printf("Tried %d schedules. %d generated, %d successful\n",

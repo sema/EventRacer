@@ -45,6 +45,7 @@ void TraceReorder::LoadSchedule(const char* filename) {
 			}
 
 			m_actions[node_id] = std::string(strchr(line.c_str(), ';') + 1);
+            m_schedule.push_back(node_id);
 		}
 	}
 	fclose(f);
@@ -72,157 +73,126 @@ void TraceReorder::SaveSchedule(const char* filename, const std::vector<int>& sc
 	fclose(f);
 }
 
-bool TraceReorder::GetScheduleFromRaces(
+bool TraceReorder::GetScheduleFromRace(
 		const VarsInfo& vinfo,
-		const std::vector<int>& rev_races,
+        const int race_id,
 		const SimpleDirectedGraph& graph,
 		const Options& options,
-		std::vector<int>* schedule) const {
+        std::vector<int>* new_schedule) const {
 
-	std::vector<TraceReorder::Reverse> all_reverses;
-	std::set<int> non_reversed_races;
-	for (size_t race_id = 0; race_id < vinfo.races().size(); ++race_id) {
-		const VarsInfo::RaceInfo& race = vinfo.races()[race_id];
-		if (race.m_coveredBy == -1 && race.m_multiParentRaces.empty()) {
-			non_reversed_races.insert(static_cast<int>(race_id));
-		}
-	}
+    if (race_id < 0 || (size_t)race_id >= vinfo.races().size()) {
+        return false;
+    }
 
-	for (size_t i = 0; i < rev_races.size(); ++i) {
-		int race_id = rev_races[i];
-		if (race_id >= 0 && race_id < static_cast<int>(vinfo.races().size())) {
-			const VarsInfo::RaceInfo& race = vinfo.races()[race_id];
-			TraceReorder::Reverse rev;
-			rev.node1 = race.m_event1;
-			rev.node2 = race.m_event2;
-			all_reverses.push_back(rev);
+    new_schedule->clear();
 
-			non_reversed_races.erase(race_id);
-			non_reversed_races.erase(race.m_coveredBy);
-			for (size_t j = 0; j < race.m_multiParentRaces.size(); ++j) {
-				non_reversed_races.erase(race.m_multiParentRaces[j]);
-			}
-		}
-	}
+    const VarsInfo::RaceInfo& race = vinfo.races()[race_id];
+    const EventGraphInterface* hb = vinfo.fast_event_graph();
 
-	// Do not reverse any other races.
-	std::vector<TraceReorder::Preserve> all_preserves;
-	for (std::set<int>::const_iterator it = non_reversed_races.begin(); it != non_reversed_races.end(); ++it) {
-		int race_id = *it;
-		const VarsInfo::RaceInfo& race = vinfo.races()[race_id];
-		TraceReorder::Preserve pres;
-		pres.node1 = race.m_event1;
-		pres.node2 = race.m_event2;
-		bool can_enforce = true;
-		for (size_t i = 0; i < all_reverses.size(); ++i) {
-			const TraceReorder::Reverse& rev = all_reverses[i];
-			if (rev.node2 == pres.node2 && rev.node1 <= pres.node1) {
-				// Avoid enforcing races that "could" cause a cycle.
-				// Note: in this case we are predicting "could" without actually checking the
-				// happens-before, but over-approximating.
-				can_enforce = false;
-			}
-		}
+    /*
+     * Takes a schedule on the form axbyc, where a b and c are event sequences and
+     * x and y are racing events (identified by the ``race_id``).
+     *
+     * This algorithm reorders ``schedule``, reversing x and y. The resulting
+     * schedule is on the form ab'yxb''c, where b' is the sequence of events in b
+     * which are independent with x, and b'' is the sequence of events dependent
+     * on x.
+     */
 
-		if (can_enforce) {
-			all_preserves.push_back(pres);
-		}
-//		printf("%d %d %d\n", race_id, race.m_event1, race.m_event2);
-	}
+    // Emit ``a`` until we see x
 
-	return GetSchedule(all_reverses, all_preserves, graph, options, schedule);
+    size_t schedule_pos = 0;
+
+    for (; schedule_pos < m_schedule.size() && m_schedule[schedule_pos] != race.m_event1; ++schedule_pos) {
+        new_schedule->push_back(m_schedule[schedule_pos]);
+    }
+
+    // Skip x
+
+    std::vector<int> bprimeprime;
+
+    bprimeprime.push_back(m_schedule[schedule_pos]);
+    ++schedule_pos;
+
+    // Emit b' until we see y
+
+    for (; schedule_pos < m_schedule.size() && m_schedule[schedule_pos] != race.m_event2; ++schedule_pos) {
+
+        // Check if the current event, u, depends on x.
+        // Dependency is transitive, so u depends on x if
+        // - x happens before u
+        // - x races with u
+        // - an event in b'' depends on u
+
+        bool depends = false;
+
+        for (size_t i = 0; i < bprimeprime.size(); ++i) {
+
+            // happens before
+            if (hb->areOrdered(bprimeprime[i], m_schedule[schedule_pos])) {
+                depends = true;
+                break;
+            }
+
+            // races
+            const VarsInfo::AllRaces& races = vinfo.races();
+            VarsInfo::AllRaces::const_iterator it = races.begin();
+            for (; it != races.end(); ++it) {
+                if (it->m_event1 == bprimeprime[i] && it->m_event2 == m_schedule[schedule_pos]) {
+                    depends = true;
+                    break;
+                }
+            }
+
+        }
+
+        if (depends) {
+            bprimeprime.push_back(m_schedule[schedule_pos]);
+        } else {
+            new_schedule->push_back(m_schedule[schedule_pos]);
+        }
+    }
+
+    // <change> marker
+
+    if (options.include_change_marker) {
+        new_schedule->push_back(-2);
+    }
+
+    // Emit y
+
+    new_schedule->push_back(m_schedule[schedule_pos]);
+    ++schedule_pos;
+
+    // Emit <relax>
+
+    if (options.relax_replay_after_all_races) {
+        new_schedule->push_back(-1);
+    }
+
+    // Emit x and b''
+
+    for (size_t i = 0; i < bprimeprime.size(); ++i) {
+        new_schedule->push_back(bprimeprime[i]);
+    }
+
+    // Emit c
+
+    for (; schedule_pos < m_schedule.size(); ++schedule_pos) {
+        new_schedule->push_back(m_schedule[schedule_pos]);
+    }
+
+    // Done
+
+    return true;
 }
 
-bool TraceReorder::GetSchedule(
-		const std::vector<Reverse>& reverses,
-		const std::vector<Preserve>& preserves,
-		const SimpleDirectedGraph& graph,
-		const Options& options,
-		std::vector<int>* schedule) const {
+void TraceReorder::GetScheduleWithoutRace(
+        std::vector<int>* new_schedule) const {
 
-	int num_reverses = 0;
+    for (size_t i = 0; i < m_schedule.size(); ++i) {
+        new_schedule->push_back(m_schedule[i]);
+    }
 
-	std::vector<int> in_degree(graph.numNodes(), 0);
-	std::vector<std::vector<int> > rev_succ(graph.numNodes());
-	for (size_t i = 0; i < reverses.size(); ++i) {
-		rev_succ[reverses[i].node2].push_back(reverses[i].node1);
-//		printf("Reverse %d < %d\n", reverses[i].node2, reverses[i].node1);
-	}
-
-	std::vector<std::vector<int> > pres_succ(graph.numNodes());
-	for (size_t i = 0; i < preserves.size(); ++i) {
-		pres_succ[preserves[i].node1].push_back(preserves[i].node2);
-//		printf("Preserve %d < %d\n", preserves[i].node1, preserves[i].node2);
-	}
-
-	std::set<int> to_output;
-	for (int node_id = 0; node_id < graph.numNodes(); ++node_id) {
-		const std::vector<int>& succs1 = graph.nodeSuccessors(node_id);
-		for (size_t i = 0; i < succs1.size(); ++i) {
-			if (succs1[i] < node_id) fprintf(stderr, "Reverse arc\n");
-			++in_degree[succs1[i]];
-		}
-		// Arcs to preserve.
-		const std::vector<int>& succs3 = pres_succ[node_id];
-		for (size_t i = 0; i < succs3.size(); ++i) {
-			++in_degree[succs3[i]];
-		}
-
-		const std::vector<int>& succs2 = rev_succ[node_id];
-		for (size_t i = 0; i < succs2.size(); ++i) {
-			++in_degree[succs2[i]];
-			++num_reverses;
-		}
-		to_output.insert(node_id);
-	}
-
-	// Number of events produced in the output.
-	int last_num_output, num_output;
-	bool change_marker_emitted = false;
-	num_output = 0;
-	schedule->clear();
-	do {
-		last_num_output = num_output;
-		for (int node_id = 0; node_id < graph.numNodes(); ++node_id) {
-			if (in_degree[node_id] == 0 && to_output.count(node_id) > 0) {
-				if (options.include_change_marker &&
-					change_marker_emitted == false &&
-					!rev_succ[node_id].empty()) {
-					schedule->push_back(-2);  // <change> marker.
-					change_marker_emitted = true;
-				}
-
-				to_output.erase(node_id);
-				schedule->push_back(node_id);
-				++num_output;
-				const std::vector<int>& succs1 = graph.nodeSuccessors(node_id);
-				for (size_t i = 0; i < succs1.size(); ++i) {
-					--in_degree[succs1[i]];
-				}
-				const std::vector<int>& succs3 = pres_succ[node_id];
-				for (size_t i = 0; i < succs3.size(); ++i) {
-					--in_degree[succs3[i]];
-				}
-				const std::vector<int>& succs2 = rev_succ[node_id];
-				for (size_t i = 0; i < succs2.size(); ++i) {
-					--in_degree[succs2[i]];
-					--num_reverses;
-					if (num_reverses == 0 && options.relax_replay_after_all_races) {
-						// -1 is a relax tag in the schedule. It does not count as an event.
-						schedule->push_back(-1);  // <relax> marker
-					}
-
-					if (options.minimize_variation_from_original) {
-						// Move the next node_id to the reversal target. Then the trace replay will try to be
-						// close to normal.
-						if (succs2[i] < node_id) node_id = succs2[i] - 1;
-					}
-				}
-			}
-		}
-	} while (last_num_output != num_output);
-
-	return num_output == graph.numNodes();  // If all nodes were added, this is a success.
 }
-
 

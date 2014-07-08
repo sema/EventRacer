@@ -60,17 +60,26 @@ void handleCreateSchedule(const std::string& params, std::string* reply) {
 		}
 	}
 
+    if (reversed_races.size() == 0) {
+        StringAppendF(reply, "{\"status\": \"No races specified, no schedule written.\"}");
+        return;
+    }
+
+    // TODO Decide if this API should change...
+    //
+    // This exposed API allows for multiple race reversals. However, the internal algorithm for race reversals only supports one race reversal at a time.
+    // The correct behavior (if multiple reversals are desired) is to incrementally reverse a single race and execute the new schedule.
+
 	std::vector<int> order;
 	TraceReorder::Options options;
 	options.relax_replay_after_all_races = (p.getIntDefault("relax", 0) != 0);
 	options.include_change_marker = options.relax_replay_after_all_races;
-	options.minimize_variation_from_original = (p.getIntDefault("min_variation", 1) != 0);
-	if (!reorder->GetScheduleFromRaces(race_app->vinfo(), reversed_races, race_app->graph(), options, &order)) {
+    if (!reorder->GetScheduleFromRace(race_app->vinfo(), reversed_races[0], race_app->graph(), options, &order)) {
 		reply->append("{\"status\": \"Could not get create the desired schedule...\"}");
 	} else {
 		reorder->SaveSchedule(FLAGS_out_schedule_file.c_str(), order);
 		StringAppendF(reply, "{\"status\": \"Schedule with %d reversed races written to %s\"}",
-				static_cast<int>(reversed_races.size()), FLAGS_out_schedule_file.c_str());
+                1, FLAGS_out_schedule_file.c_str()); // static_cast<int>(reversed_races.size()) TODO enable multiple reversals?
 	}
 }
 
