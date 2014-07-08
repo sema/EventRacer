@@ -270,23 +270,25 @@ void explore(const char* initial_schedule, const char* initial_er_log) {
                 // Step 1 & Step 2 -- push states
 
                 ExecutableSchedule executed_schedule = new_reorder->GetSchedule();
+                Schedule schedule = new_reorder->RemoveSpecialMarkers(executed_schedule);
+
                 size_t old_state_index = stack.size() - 1;
 
                 int new_depth = state->depth + 1;
 
-                std::cout << "Executed schedule has " << executed_schedule.size() << " events" << std::endl;
+                std::cout << "Executed schedule has " << schedule.size() << " events" << std::endl;
                 std::cout << "===== Searching down" << std::endl;
 
                 // The stack should be a prefix of executed_schedule (with an empty zero element).
-                for (size_t i = stack.size()-1; i < executed_schedule.size(); ++i) {
+                for (size_t i = stack.size()-1; i < schedule.size(); ++i) {
                     State* new_state = new State();
                     new_state->depth = new_depth;
                     new_state->name = new_name;
 
                     new_state->schedule = state->schedule;
-                    new_state->schedule.push_back(executed_schedule[i]);
+                    new_state->schedule.push_back(schedule[i]);
 
-                    state->visited.insert(executed_schedule[i]);
+                    state->visited.insert(schedule[i]);
 
                     stack.push_back(new_state);
                     state = stack.back();
