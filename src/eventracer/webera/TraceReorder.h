@@ -52,9 +52,9 @@ public:
 			const Options& options,
 			std::vector<int>* schedule) const;
 
-    void GetScheduleWithoutRace(std::vector<int>* schedule) const;
+    std::vector<int> GetSchedule() const;
 
-	void SaveSchedule(const char* filename, const std::vector<int>& schedule) const;
+    void SaveSchedule(const char* filename, const std::vector<int>& schedule) const;
 
 private:
 	std::vector<std::string> m_actions;

@@ -80,7 +80,12 @@ bool TraceReorder::GetScheduleFromRace(
 		const Options& options,
         std::vector<int>* new_schedule) const {
 
-    if (race_id < 0 || (size_t)race_id >= vinfo.races().size()) {
+    if (race_id < 0) {
+        *new_schedule = m_schedule;
+        return true;
+    }
+
+    if ((size_t)race_id >= vinfo.races().size()) {
         return false;
     }
 
@@ -187,12 +192,7 @@ bool TraceReorder::GetScheduleFromRace(
     return true;
 }
 
-void TraceReorder::GetScheduleWithoutRace(
-        std::vector<int>* new_schedule) const {
-
-    for (size_t i = 0; i < m_schedule.size(); ++i) {
-        new_schedule->push_back(m_schedule[i]);
-    }
-
+std::vector<int> TraceReorder::GetSchedule() const {
+    return m_schedule;
 }
 
