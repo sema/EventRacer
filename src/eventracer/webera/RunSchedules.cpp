@@ -63,7 +63,7 @@ bool MoveFile(const std::string& file, const std::string& out_dir) {
 	return true;
 }
 
-bool performSavedSchedule(const std::string& schedule_name, std::string* executed_schedule_log, std::string* executed_er_log) {
+bool performSavedSchedule(const std::string& race_name, std::string* executed_schedule_log, std::string* executed_er_log) {
     *executed_schedule_log = "";
     *executed_er_log = "";
 
@@ -77,7 +77,7 @@ bool performSavedSchedule(const std::string& schedule_name, std::string* execute
 		return false;
 	}
 
-	std::string out_dir = StringPrintf("%s/%s", FLAGS_out_dir.c_str(), schedule_name.c_str());
+    std::string out_dir = StringPrintf("%s/%s", FLAGS_out_dir.c_str(), race_name.c_str());
 
 	if (system(StringPrintf("mkdir -p %s", out_dir.c_str()).c_str()) != 0) {
 		fprintf(stderr, "Could not create output dir %s. Set the flag --out_dir\n", out_dir.c_str());
@@ -105,29 +105,67 @@ bool performSavedSchedule(const std::string& schedule_name, std::string* execute
 	return true;
 }
 
-typedef std::vector<int> Schedule;
+typedef int RaceID;
+typedef int MixedEventId;
+typedef size_t StrictEventID; // no placeholders or -1 error messages
+
+typedef std::vector<StrictEventID> Schedule;
+typedef std::vector<StrictEventID> ScheduleSuffix;
+typedef std::vector<MixedEventId> ExecutableSchedule; // allow for -1 and -2 markers
+
+typedef struct EATEntry_t {
+
+    EATEntry_t(std::string base_race_output_dir, // TODO use a non-empty value for this
+               RaceID race_id,
+               ScheduleSuffix schedule_suffix,
+               ExecutableSchedule executable_schedule,
+               std::tr1::shared_ptr<TraceReorder> reorder)
+        : base_race_output_dir(base_race_output_dir)
+        , race_id(race_id)
+        , schedule_suffix(schedule_suffix)
+        , executable_schedule(executable_schedule)
+        , reorder(reorder)
+    {
+    }
+
+    std::string base_race_output_dir;
+    RaceID race_id;
+    ScheduleSuffix schedule_suffix;
+    ExecutableSchedule executable_schedule;
+    std::tr1::shared_ptr<TraceReorder> reorder;
+
+} EATEntry;
+
+typedef std::vector<EATEntry> EAT;
 
 typedef struct {
 
     std::string name;
-    std::vector<std::pair<int, Schedule> > EAT;
-    std::set<int> visited;
-    int depth;
+
+    EAT eat;
+    int depth; // TODO use
+    std::set<StrictEventID> visited;
     Schedule schedule;
-    std::tr1::shared_ptr<TraceReorder> reorder;
 
 } State;
 
-bool StateHasUnexploredEAT(const State& state, Schedule* schedule, int* race_id) {
+bool StateHasUnexploredEAT(const State* state, const EATEntry** result) {
 
-    schedule->clear();
-    *race_id = -1;
+    std::cout << ",,,,,,,,,,,,,,,,,, FINDING UNEXPLORED BRANCH ,,,,,,,,,,,,,,";
 
-    for (int i = state.EAT.size()-1; i >= 0; --i) {
-        const std::pair<int, Schedule>& entry = state.EAT[i];
-        if (state.visited.find(entry.second[0]) == state.visited.end()) {
-            *schedule = entry.second;
-            *race_id = entry.first;
+    for (size_t i = 0; i < state->eat.size(); ++i) {
+        const EATEntry& entry = state->eat[i];
+
+        if (state->schedule.size() > 0)
+        std::cout << "Looking at event sequence starting with " << entry.schedule_suffix[0] << " and comparing with " << state->visited.size() << " visited events in state ending with event " << state->schedule.back() << std::endl;
+
+        std::set<StrictEventID>::iterator it = state->visited.begin();
+        for (; it != state->visited.end(); ++it) {
+            std::cout << " visisted " << *it << std::endl;
+        }
+
+        if (state->visited.find(entry.schedule_suffix[0]) == state->visited.end()) {
+            *result = &entry;
             return true;
         }
     }
@@ -135,7 +173,7 @@ bool StateHasUnexploredEAT(const State& state, Schedule* schedule, int* race_id)
     return false;
 }
 
-void EATMerge(std::vector<State>* stack, size_t offset, const Schedule& schedule, int race_id) {
+int EATMerge(std::vector<State*>* stack, size_t offset, const EATEntry& entry) {
 
     /*
      * Notice, the offset references the position in on the stack on which the schedule
@@ -149,20 +187,24 @@ void EATMerge(std::vector<State>* stack, size_t offset, const Schedule& schedule
 
     // next element on stack exist and next element matches next element in the schedule
     while (stack->size() > offset+1 &&
-           schedule.size() > schedule_offset &&
-           stack->at(offset+1).schedule.back() == schedule[schedule_offset]) {
+           entry.schedule_suffix.size() > schedule_offset &&
+           stack->at(offset+1)->schedule.back() == entry.schedule_suffix[schedule_offset]) {
 
         ++offset;
         ++schedule_offset;
     }
 
-    if (schedule.size() <= schedule_offset) {
+    if (entry.schedule_suffix.size() <= schedule_offset) {
         // The schedule have already been explored
-        return;
+        return -1;
     }
 
-    std::vector<int> sufix(schedule.begin()+schedule_offset, schedule.end());
-    stack->at(offset).EAT.push_back(std::pair<int, Schedule>(race_id, sufix));
+    EATEntry new_entry = entry;
+    new_entry.schedule_suffix = ScheduleSuffix(entry.schedule_suffix.begin()+schedule_offset, entry.schedule_suffix.end());
+
+    stack->at(offset)->eat.push_back(new_entry);
+
+    return schedule_offset;
 
 }
 
@@ -172,46 +214,52 @@ void explore(const char* initial_schedule, const char* initial_er_log) {
     int successful_reverses = 0;
     int successful_schedules = 0;
 
-    std::vector<State> stack;
+    std::vector<State*> stack;
+    stack.reserve(5000);
 
     // Initialize
 
     std::tr1::shared_ptr<TraceReorder> init_reorder = std::tr1::shared_ptr<TraceReorder>(new TraceReorder());
     init_reorder->LoadSchedule(initial_schedule);
 
-    State initial_state;
-    initial_state.depth = -1;
-    initial_state.name = "base";
-    initial_state.reorder = init_reorder;
-    initial_state.EAT.push_back(std::pair<int, Schedule>(-1, init_reorder->GetSchedule()));
+    ExecutableSchedule init_executable_schedule = init_reorder->GetSchedule();
+    Schedule init_schedule = init_reorder->RemoveSpecialMarkers(init_executable_schedule);
+
+    EATEntry init_eat("", -1, init_schedule, init_executable_schedule, init_reorder);
+
+    State* initial_state = new State();
+    initial_state->depth = -1;
+    initial_state->name = "base";
+    initial_state->eat.push_back(init_eat);
 
     stack.push_back(initial_state);
 
     while (!stack.empty()) {
 
-        State state = stack.back();
+        State* state = stack.back();
 
         /*
          * Check for unexplored schedule, follow it, and update EATs
          * Step 4 - (1 - 2)* - 3
          */
 
-        Schedule new_schedule;
-        int new_race_id;
-        if (StateHasUnexploredEAT(state, &new_schedule, &new_race_id)) {
+        const EATEntry* next_eat = NULL;
+        if (StateHasUnexploredEAT(state, &next_eat) && next_eat != NULL) {
+
+            std::cout << "========= Exploring EAT branch (race # " << next_eat->race_id << ") at offset " << stack.size() - 1 << std::endl;
 
             // Step 4 -- Execute new schedule
 
             ++successful_reverses;
 
-            std::string new_name = StringPrintf("%s_race%d", state.name.c_str(), new_race_id);
+            std::string new_name = StringPrintf("%s_race%d", state->name.c_str(), next_eat->race_id);
             fprintf(stderr, "Reordering \"%s\": ", new_name.c_str());
 
-            state.reorder->SaveSchedule(FLAGS_tmp_schedule_file.c_str(), new_schedule);
+            next_eat->reorder->SaveSchedule(FLAGS_tmp_schedule_file.c_str(), next_eat->executable_schedule);
 
             std::string executed_schedule_log;
             std::string executed_er_log;
-            if (performSavedSchedule(new_name, &executed_schedule_log, &executed_er_log)) {
+            if (performSavedSchedule(new_name, &executed_schedule_log, &executed_er_log)) { // TODO this method should take as argument the base dir to read log files
 
                 ++successful_schedules;
 
@@ -221,37 +269,40 @@ void explore(const char* initial_schedule, const char* initial_er_log) {
 
                 // Step 1 & Step 2 -- push states
 
-                Schedule executed_schedule = new_reorder->GetSchedule();
+                ExecutableSchedule executed_schedule = new_reorder->GetSchedule();
                 size_t old_state_index = stack.size() - 1;
 
-                int new_depth = state.depth + 1;
+                int new_depth = state->depth + 1;
 
-                // The stack should be a prefix of executed_schedule.
-                for (size_t i = stack.size(); i < executed_schedule.size(); ++i) {
-                    State new_state;
-                    new_state.depth = new_depth;
-                    new_state.name = new_name;
+                std::cout << "Executed schedule has " << executed_schedule.size() << " events" << std::endl;
+                std::cout << "===== Searching down" << std::endl;
 
-                    new_state.schedule = state.schedule;
-                    new_state.schedule.push_back(executed_schedule[i]);
+                // The stack should be a prefix of executed_schedule (with an empty zero element).
+                for (size_t i = stack.size()-1; i < executed_schedule.size(); ++i) {
+                    State* new_state = new State();
+                    new_state->depth = new_depth;
+                    new_state->name = new_name;
 
-                    new_state.reorder = new_reorder;
+                    new_state->schedule = state->schedule;
+                    new_state->schedule.push_back(executed_schedule[i]);
 
-                    state.visited.insert(executed_schedule[i]);
+                    state->visited.insert(executed_schedule[i]);
 
                     stack.push_back(new_state);
                     state = stack.back();
+
+                    std::cout << "PUSH (stack size " << stack.size() << ")" << std::endl;
                 }
 
-                State& old_state = stack[old_state_index];
-                std::vector<std::pair<int, Schedule> > old_eat;
-                old_eat.swap(old_state.EAT);
+                State* old_state = stack[old_state_index];
+                EAT old_eat;
+                old_eat.swap(old_state->eat);
 
                 while (!old_eat.empty()) {
-                    std::pair<int, Schedule> eat = old_eat.back();
+                    EATEntry eat = old_eat.back();
                     old_eat.pop_back();
 
-                    EATMerge(&stack, old_state_index, eat.second, eat.first);
+                    EATMerge(&stack, old_state_index, eat);
                 }
 
                 // Step 3 -- update EATs
@@ -277,11 +328,15 @@ void explore(const char* initial_schedule, const char* initial_er_log) {
                     races.push_back(race_id);
                 }
 
-                std::cout << "Checking for races in event sequence of length " << state.schedule.size() << std::endl;
+                std::cout << "Checking for races in event sequence of length " << state->schedule.size() << " / " << stack.size() << std::endl;
 
-                for (int i = state.schedule.size() - 1; i >= 0; --i) {
+                for (int i = state->schedule.size() - 1; i >= 0; --i) {
 
-                    int event2 = state.schedule[i];
+                    if (stack[i]->depth != state->depth) {
+                        break; // optimization, we don't need to re-check trees we have already explored.
+                    }
+
+                    int event2 = state->schedule[i];
                     std::map<int, std::vector<int> >& racing = raceMap[event2];
 
                     if (racing.size() == 0) {
@@ -290,21 +345,23 @@ void explore(const char* initial_schedule, const char* initial_er_log) {
 
                     for (int j = i - 1; j >= 0; --j) {
 
-                        int event1 = state.schedule[j];
+                        int event1 = state->schedule[j];
                         std::vector<int>& races = racing[event1];
 
                         if (!races.empty()) {
 
                             ++all_schedules;
 
-                            int race_id = races.front();
+                            RaceID race_id = races.front();
 
-                            std::vector<int> pending_schedule;
-                            new_reorder->GetScheduleFromRace(vinfo, race_id, new_race_app.graph(), options, &pending_schedule);
+                            ExecutableSchedule pending_executable_schedule;
+                            new_reorder->GetScheduleFromRace(vinfo, race_id, new_race_app.graph(), options, &pending_executable_schedule);
+                            ScheduleSuffix pending_schedule = new_reorder->RemoveSpecialMarkers(pending_executable_schedule);
+                            EATEntry pending_entry("", race_id, pending_schedule, pending_executable_schedule, new_reorder);
 
-                            EATMerge(&stack, 0, pending_schedule, race_id);
+                            int offset = EATMerge(&stack, 0, pending_entry);
 
-                            std::cout << "Identified race between " << i << " - " << event1 << " and " << j << " - " << event2 << " with race #" << race_id << std::endl;
+                            std::cout << "============ Identified race between " << i << " - " << event1 << " and " << j << " - " << event2 << " with race #" << race_id << " inserted at offset " << offset << std::endl;
 
                             break;
                         }
@@ -312,14 +369,20 @@ void explore(const char* initial_schedule, const char* initial_er_log) {
 
                 }
 
-                std::cout << "Finished iteration" << std::endl;
+                std::cout << "Finished iteration (stack size " << stack.size() << ")" << std::endl;
 
             } // End successful execution
 
         } // End if has unexplored EAT
 
         // backtrack
+
+        delete state;
+
+        state = stack.back();
         stack.pop_back();
+
+        std::cout << "POP (stack size " << stack.size() << ")" << std::endl;
 
     }
 

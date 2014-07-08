@@ -53,6 +53,7 @@ public:
 			std::vector<int>* schedule) const;
 
     std::vector<int> GetSchedule() const;
+    std::vector<size_t> RemoveSpecialMarkers(const std::vector<int>& schedule);
 
     void SaveSchedule(const char* filename, const std::vector<int>& schedule) const;
 

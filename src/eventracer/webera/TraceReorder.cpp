@@ -196,3 +196,21 @@ std::vector<int> TraceReorder::GetSchedule() const {
     return m_schedule;
 }
 
+std::vector<size_t> TraceReorder::RemoveSpecialMarkers(const std::vector<int>& schedule) {
+
+    std::vector<size_t> output;
+    output.reserve(schedule.size());
+
+    std::vector<int>::const_iterator it = schedule.begin();
+    for (; it != schedule.end(); ++it) {
+
+        if (*it > 0) {
+            output.push_back(*it);
+        }
+
+    }
+
+    return output;
+
+}
+
