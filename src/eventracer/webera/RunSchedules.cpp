@@ -55,6 +55,8 @@ DEFINE_int32(max_races_per_memory_location, 3,
 
 namespace {
 
+int SEARCH_DEPTH = 0;
+
 bool MoveFile(const std::string& file, const std::string& out_dir) {
 	if (system(StringPrintf("mv %s %s", file.c_str(), out_dir.c_str()).c_str()) != 0) {
         fprintf(stderr, "Cannot move %s\n", file.c_str());
@@ -72,7 +74,7 @@ bool performSavedSchedule(const std::string& race_name, std::string* executed_sc
 			FLAGS_site.c_str(), FLAGS_tmp_schedule_file.c_str());
 	command += " > ";
 	command += FLAGS_tmp_stdout;
-	if (system(command.c_str()) != 0) {
+    if (system(command.c_str()) != 0) {
 		fprintf(stderr, "Could not run command: %s\n", command.c_str());
 		return false;
 	}
@@ -143,7 +145,7 @@ typedef struct {
     std::string name;
 
     EAT eat;
-    int depth; // TODO use
+    int depth;
     std::set<StrictEventID> visited;
     Schedule schedule;
 
@@ -152,6 +154,10 @@ typedef struct {
 bool StateHasUnexploredEAT(const State* state, const EATEntry** result) {
 
     std::cout << ",,,,,,,,,,,,,,,,,, FINDING UNEXPLORED BRANCH ,,,,,,,,,,,,,,";
+
+    if (state->depth > SEARCH_DEPTH) {
+        return false;
+    }
 
     for (size_t i = 0; i < state->eat.size(); ++i) {
         const EATEntry& entry = state->eat[i];
@@ -204,12 +210,22 @@ int EATMerge(std::vector<State*>* stack, size_t offset, const EATEntry& entry) {
 
     stack->at(offset)->eat.push_back(new_entry);
 
-    int id = -1;
-    if (stack->at(offset)->schedule.size() > 0)
-        id = stack->at(offset)->schedule.back();
-
     return schedule_offset;
 
+}
+
+void EATPropagate(std::vector<State*>* stack, size_t index) {
+
+    State* state = stack->at(index);
+    EAT old_eat;
+    old_eat.swap(state->eat);
+
+    while (!old_eat.empty()) {
+        EATEntry eat = old_eat.back();
+        old_eat.pop_back();
+
+        EATMerge(stack, index, eat);
+    }
 }
 
 void explore(const char* initial_schedule, const char* initial_er_log) {
@@ -300,16 +316,7 @@ void explore(const char* initial_schedule, const char* initial_er_log) {
                     std::cout << "PUSH (stack size " << stack.size() << ")" << std::endl;
                 }
 
-                State* old_state = stack[old_state_index];
-                EAT old_eat;
-                old_eat.swap(old_state->eat);
-
-                while (!old_eat.empty()) {
-                    EATEntry eat = old_eat.back();
-                    old_eat.pop_back();
-
-                    EATMerge(&stack, old_state_index, eat);
-                }
+                EATPropagate(&stack, old_state_index);
 
                 // Step 3 -- update EATs
 
