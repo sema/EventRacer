@@ -30,32 +30,46 @@
 #include "strutil.h"
 #include "TraceReorder.h"
 
+DEFINE_string(in_dir, "/tmp/",
+        "Path to dir containing initial log files such as log.network.data");
 DEFINE_string(in_schedule_file, "/tmp/schedule.data",
 		"Filename with the schedules.");
 
 DEFINE_string(site, "", "The website to replay");
 
-DEFINE_string(replay_command, "LD_LIBRARY_PATH=/home/veselin/gitwk/WebERA/WebKitBuild/Release/lib /home/veselin/gitwk/WebERA/R5/clients/Replay/bin/replay %s %s",
+DEFINE_string(replay_command, "LD_LIBRARY_PATH=/home/veselin/gitwk/WebERA/WebKitBuild/Release/lib /home/veselin/gitwk/WebERA/R5/clients/Replay/bin/replay %s %s -in_dir %s",
 		"Command to run replay with twice %s for the site and the replay file.");
 
-DEFINE_string(tmp_er_log_file, "/tmp/new_er_log",
+DEFINE_string(tmp_new_schedule_file, "/tmp/new_schedule.data",
+        "Filename with the new schedule to be executed.");
+
+DEFINE_string(tmp_er_log_file, "/tmp/out.ER_actionlog",
         "Filename with the new ER log.");
-DEFINE_string(tmp_schedule_file, "/tmp/new_schedule.data",
+DEFINE_string(tmp_schedule_file, "/tmp/out.schedule.data",
 		"Filename with the schedules.");
-DEFINE_string(tmp_error_log, "/tmp/errors.log",
+DEFINE_string(tmp_error_log, "/tmp/out.errors.log",
 		"Filename with the schedules.");
-DEFINE_string(tmp_png_file, "/tmp/replay.png",
+DEFINE_string(tmp_png_file, "/tmp/out.screenshot.png",
 		"Filename with the schedules.");
-DEFINE_string(tmp_stdout, "/tmp/stdout.txt", "Standard output redirect of WebERA.");
+DEFINE_string(tmp_stdout, "/tmp/stdout.txt",
+        "Standard output redirect of WebERA.");
+DEFINE_string(tmp_network_log, "/tmp/log.network.data",
+        "Filename with network data.");
+DEFINE_string(tmp_time_log, "/tmp/log.time.data",
+        "Filename with time data.");
+DEFINE_string(tmp_random_log, "/tmp/log.random.data",
+        "Filename with random data.");
+DEFINE_string(tmp_status_log, "/tmp/status.data",
+        "Filename with status data.");
 
-DEFINE_string(out_dir, "/tmp/outdir", "Location of the output.");
 
-DEFINE_int32(max_races_per_memory_location, 3,
-		"Maximum number of races to try to reverse per memory location.");
+DEFINE_string(out_dir, "/tmp/outdir",
+        "Location of the output.");
+
+DEFINE_int32(conflict_reversal_bound, 1,
+        "Conflict-reversal bound.");
 
 namespace {
-
-int SEARCH_DEPTH = 0;
 
 bool MoveFile(const std::string& file, const std::string& out_dir) {
 	if (system(StringPrintf("mv %s %s", file.c_str(), out_dir.c_str()).c_str()) != 0) {
@@ -65,15 +79,31 @@ bool MoveFile(const std::string& file, const std::string& out_dir) {
 	return true;
 }
 
-bool performSavedSchedule(const std::string& race_name, std::string* executed_schedule_log, std::string* executed_er_log) {
+bool performSchedule(const std::string& race_name, const std::string& base_dir, const std::string& schedule,
+                     std::string* executed_race_dir, std::string* executed_schedule_log, std::string* executed_er_log) {
+
+    /*
+     * Executes replay command supplying the base dir with recorded data, URL, and path to the schedule.
+     *
+     * The function _moves_ all known output from the replay command to a race dir, and returns
+     * - The path to the race dir
+     * - The path to the executed schedule
+     * - The path to the ER action log
+     */
+
+
+    *executed_race_dir = "";
     *executed_schedule_log = "";
     *executed_er_log = "";
 
     std::string command;
 	StringAppendF(&command, FLAGS_replay_command.c_str(),
-			FLAGS_site.c_str(), FLAGS_tmp_schedule_file.c_str());
+            base_dir.c_str(), FLAGS_site.c_str(), schedule.c_str());
 	command += " > ";
 	command += FLAGS_tmp_stdout;
+
+    fprintf(stdout, "Running %s\n", command.c_str());
+
     if (system(command.c_str()) != 0) {
 		fprintf(stderr, "Could not run command: %s\n", command.c_str());
 		return false;
@@ -81,28 +111,28 @@ bool performSavedSchedule(const std::string& race_name, std::string* executed_sc
 
     std::string out_dir = StringPrintf("%s/%s", FLAGS_out_dir.c_str(), race_name.c_str());
 
+    // Move result files
+
 	if (system(StringPrintf("mkdir -p %s", out_dir.c_str()).c_str()) != 0) {
 		fprintf(stderr, "Could not create output dir %s. Set the flag --out_dir\n", out_dir.c_str());
 		return false;
 	}
-    if (!MoveFile(FLAGS_tmp_er_log_file, out_dir)) return false;
-	if (!MoveFile(FLAGS_tmp_schedule_file, out_dir)) return false;
-	if (!MoveFile(FLAGS_tmp_png_file, out_dir)) return false;
-	if (!MoveFile(FLAGS_tmp_error_log, out_dir)) return false;
-	if (!MoveFile(FLAGS_tmp_stdout, out_dir)) return false;
+    if (!MoveFile(schedule, out_dir)) return false;
+    if (!MoveFile(FLAGS_tmp_er_log_file, out_dir + "/ER_actionlog")) return false;
+    if (!MoveFile(FLAGS_tmp_schedule_file, out_dir + "/schedule.data")) return false;
+    if (!MoveFile(FLAGS_tmp_png_file, out_dir + "/screenshot.png")) return false;
+    if (!MoveFile(FLAGS_tmp_error_log, out_dir + "/errors.log")) return false;
+    if (!MoveFile(FLAGS_tmp_stdout, out_dir + "/stdout")) return false;
+    if (!MoveFile(FLAGS_tmp_network_log, out_dir + "/log.network.data")) return false;
+    if (!MoveFile(FLAGS_tmp_time_log, out_dir + "/log.time.data")) return false;
+    if (!MoveFile(FLAGS_tmp_random_log, out_dir + "/log.random.data")) return false;
+    if (!MoveFile(FLAGS_tmp_status_log, out_dir + "/status.data")) return false;
 
-    size_t schedule_pos = FLAGS_tmp_schedule_file.find_last_of('/');
-    if (schedule_pos == std::string::npos) {
-        schedule_pos = 0;
-    }
+    // Output
 
-    size_t log_pos = FLAGS_tmp_er_log_file.find_last_of('/');
-    if (log_pos == std::string::npos) {
-        log_pos = 0;
-    }
-
-    *executed_schedule_log = StringPrintf("%s/%s", out_dir.c_str(), FLAGS_tmp_schedule_file.substr(schedule_pos).c_str());
-    *executed_er_log = StringPrintf("%s/%s", out_dir.c_str(), FLAGS_tmp_er_log_file.substr(log_pos).c_str());
+    *executed_race_dir = out_dir;
+    *executed_schedule_log = StringPrintf("%s/%s", out_dir.c_str(), "schedule.data");
+    *executed_er_log = StringPrintf("%s/%s", out_dir.c_str(), "ER_actionlog");
 
 	return true;
 }
@@ -117,7 +147,7 @@ typedef std::vector<MixedEventId> ExecutableSchedule; // allow for -1 and -2 mar
 
 typedef struct EATEntry_t {
 
-    EATEntry_t(std::string base_race_output_dir, // TODO use a non-empty value for this
+    EATEntry_t(std::string base_race_output_dir,
                RaceID race_id,
                ScheduleSuffix schedule_suffix,
                ExecutableSchedule executable_schedule,
@@ -153,22 +183,12 @@ typedef struct {
 
 bool StateHasUnexploredEAT(const State* state, const EATEntry** result) {
 
-    std::cout << ",,,,,,,,,,,,,,,,,, FINDING UNEXPLORED BRANCH ,,,,,,,,,,,,,,";
-
-    if (state->depth > SEARCH_DEPTH) {
+    if (state->depth >= FLAGS_conflict_reversal_bound) {
         return false;
     }
 
     for (size_t i = 0; i < state->eat.size(); ++i) {
         const EATEntry& entry = state->eat[i];
-
-        if (state->schedule.size() > 0)
-        std::cout << "Looking at event sequence starting with " << entry.schedule_suffix[0] << " and comparing with " << state->visited.size() << " visited events in state ending with event " << state->schedule.back() << std::endl;
-
-        std::set<StrictEventID>::iterator it = state->visited.begin();
-        for (; it != state->visited.end(); ++it) {
-            std::cout << " visisted " << *it << std::endl;
-        }
 
         if (state->visited.find(entry.schedule_suffix[0]) == state->visited.end()) {
             *result = &entry;
@@ -228,7 +248,7 @@ void EATPropagate(std::vector<State*>* stack, size_t index) {
     }
 }
 
-void explore(const char* initial_schedule, const char* initial_er_log) {
+void explore(const char* initial_schedule, const char* initial_base_dir) {
 
     int all_schedules = 0;
     int successful_reverses = 0;
@@ -245,11 +265,11 @@ void explore(const char* initial_schedule, const char* initial_er_log) {
     ExecutableSchedule init_executable_schedule = init_reorder->GetSchedule();
     Schedule init_schedule = init_reorder->RemoveSpecialMarkers(init_executable_schedule);
 
-    EATEntry init_eat("", -1, init_schedule, init_executable_schedule, init_reorder);
+    EATEntry init_eat(initial_base_dir, -1, init_schedule, init_executable_schedule, init_reorder);
 
     State* initial_state = new State();
     initial_state->depth = -1;
-    initial_state->name = "base";
+    initial_state->name = "";
     initial_state->eat.push_back(init_eat);
 
     stack.push_back(initial_state);
@@ -266,20 +286,20 @@ void explore(const char* initial_schedule, const char* initial_er_log) {
         const EATEntry* next_eat = NULL;
         if (StateHasUnexploredEAT(state, &next_eat) && next_eat != NULL) {
 
-            std::cout << "========= Exploring EAT branch (race # " << next_eat->race_id << ") at offset " << stack.size() - 1 << std::endl;
-
             // Step 4 -- Execute new schedule
 
             ++successful_reverses;
 
-            std::string new_name = StringPrintf("%s_race%d", state->name.c_str(), next_eat->race_id);
-            fprintf(stderr, "Reordering \"%s\": ", new_name.c_str());
+            std::string new_name = next_eat->race_id == -1 ? "base" : StringPrintf("%s_race%d", state->name.c_str(), next_eat->race_id);
+            fprintf(stderr, "Reordering \"%s\" at depth %d (limit %d): ", new_name.c_str(), state->depth, FLAGS_conflict_reversal_bound);
 
-            next_eat->reorder->SaveSchedule(FLAGS_tmp_schedule_file.c_str(), next_eat->executable_schedule);
+            next_eat->reorder->SaveSchedule(FLAGS_tmp_new_schedule_file.c_str(), next_eat->executable_schedule);
 
+            std::string executed_base_dir;
             std::string executed_schedule_log;
             std::string executed_er_log;
-            if (performSavedSchedule(new_name, &executed_schedule_log, &executed_er_log)) { // TODO this method should take as argument the base dir to read log files
+            if (performSchedule(new_name, next_eat->base_race_output_dir, FLAGS_tmp_new_schedule_file.c_str(),
+                                &executed_base_dir, &executed_schedule_log, &executed_er_log)) {
 
                 ++successful_schedules;
 
@@ -296,9 +316,6 @@ void explore(const char* initial_schedule, const char* initial_er_log) {
 
                 int new_depth = state->depth + 1;
 
-                std::cout << "Executed schedule has " << schedule.size() << " events" << std::endl;
-                std::cout << "===== Searching down" << std::endl;
-
                 // The stack should be a prefix of executed_schedule (with an empty zero element).
                 for (size_t i = stack.size()-1; i < schedule.size(); ++i) {
                     State* new_state = new State();
@@ -312,8 +329,6 @@ void explore(const char* initial_schedule, const char* initial_er_log) {
 
                     stack.push_back(new_state);
                     state = stack.back();
-
-                    std::cout << "PUSH (stack size " << stack.size() << ")" << std::endl;
                 }
 
                 EATPropagate(&stack, old_state_index);
@@ -325,7 +340,7 @@ void explore(const char* initial_schedule, const char* initial_er_log) {
                 options.relax_replay_after_all_races = true;
 
                 const VarsInfo& vinfo = new_race_app.vinfo();
-                //const EventGraphInterface* hb = vinfo.fast_event_graph();
+
                 std::map<int, std::map<int, std::vector<int> > > raceMap; // <event1, event2> => [race ...]
 
                 // Build raceMap for quick "does x and y race" lookups
@@ -340,8 +355,6 @@ void explore(const char* initial_schedule, const char* initial_er_log) {
                     std::vector<int>& races = racing[race.m_event1];
                     races.push_back(race_id);
                 }
-
-                std::cout << "Checking for races in event sequence of length " << state->schedule.size() << " / " << stack.size() << std::endl;
 
                 for (int i = state->schedule.size() - 1; i >= 0; --i) {
 
@@ -370,19 +383,15 @@ void explore(const char* initial_schedule, const char* initial_er_log) {
                             ExecutableSchedule pending_executable_schedule;
                             new_reorder->GetScheduleFromRace(vinfo, race_id, new_race_app.graph(), options, &pending_executable_schedule);
                             ScheduleSuffix pending_schedule = new_reorder->RemoveSpecialMarkers(pending_executable_schedule);
-                            EATEntry pending_entry("", race_id, pending_schedule, pending_executable_schedule, new_reorder);
+                            EATEntry pending_entry(executed_base_dir, race_id, pending_schedule, pending_executable_schedule, new_reorder);
 
-                            int offset = EATMerge(&stack, 0, pending_entry);
-
-                            std::cout << "============ Identified race between " << i << " - " << event1 << " and " << j << " - " << event2 << " with race #" << race_id << " inserted at offset " << offset << std::endl;
+                            EATMerge(&stack, 0, pending_entry);
 
                             break;
                         }
                     }
 
                 }
-
-                std::cout << "Finished iteration (stack size " << stack.size() << ")" << std::endl;
 
             } // End successful execution
 
@@ -394,8 +403,6 @@ void explore(const char* initial_schedule, const char* initial_er_log) {
 
         state = stack.back();
         stack.pop_back();
-
-        std::cout << "POP (stack size " << stack.size() << ")" << std::endl;
 
     }
 
@@ -415,7 +422,7 @@ int main(int argc, char* argv[]) {
 		return -1;
 	}
 
-    explore(FLAGS_in_schedule_file.c_str(), argv[1]);
+    explore(FLAGS_in_schedule_file.c_str(), FLAGS_in_dir.c_str());
 
 	return 0;
 }
