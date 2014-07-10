@@ -298,6 +298,9 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
             std::string executed_base_dir;
             std::string executed_schedule_log;
             std::string executed_er_log;
+
+            state->visited.insert(next_eat->schedule_suffix[0]);
+
             if (performSchedule(new_name, next_eat->base_race_output_dir, FLAGS_tmp_new_schedule_file.c_str(),
                                 &executed_base_dir, &executed_schedule_log, &executed_er_log)) {
 
@@ -395,14 +398,16 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
 
             } // End successful execution
 
-        } // End if has unexplored EAT
+        } else { // End if has unexplored EAT
 
-        // backtrack
+            // backtrack
 
-        delete state;
+            delete state;
 
-        state = stack.back();
-        stack.pop_back();
+            state = stack.back();
+            stack.pop_back();
+
+        }
 
     }
 
