@@ -37,7 +37,7 @@ DEFINE_string(in_schedule_file, "/tmp/schedule.data",
 
 DEFINE_string(site, "", "The website to replay");
 
-DEFINE_string(replay_command, "LD_LIBRARY_PATH=/home/veselin/gitwk/WebERA/WebKitBuild/Release/lib /home/veselin/gitwk/WebERA/R5/clients/Replay/bin/replay %s %s -in_dir %s",
+DEFINE_string(replay_command, "/home/veselin/gitwk/WebERA/R5/clients/Replay/bin/replay %s %s -in_dir %s",
 		"Command to run replay with twice %s for the site and the replay file.");
 
 DEFINE_string(tmp_new_schedule_file, "/tmp/new_schedule.data",
@@ -302,7 +302,7 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
             }
 
             std::string new_name = next_eat->race_id == -1 ? "base" : StringPrintf("%s_race%d", state->name.c_str(), next_eat->race_id);
-            fprintf(stdout, "Reordering \"%s\" at depth %d (limit %d) offset %d: ", new_name.c_str(), state->depth, FLAGS_conflict_reversal_bound, (int)stack.size() - 1);
+            fprintf(stdout, "Reordering \"%s\" at depth %d (limit %d) offset %d: \n", new_name.c_str(), state->depth, FLAGS_conflict_reversal_bound, (int)stack.size() - 1);
 
             next_eat->reorder->SaveSchedule(FLAGS_tmp_new_schedule_file.c_str(), next_eat->executable_schedule);
 
