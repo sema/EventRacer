@@ -79,7 +79,7 @@ bool MoveFile(const std::string& file, const std::string& out_dir) {
 	return true;
 }
 
-bool performSchedule(const std::string& race_name, const std::string& base_dir, const std::string& schedule,
+bool performSchedule(const std::string& race_name, const std::string& origin, const std::string& base_dir, const std::string& schedule,
                      std::string* executed_race_dir, std::string* executed_schedule_log, std::string* executed_er_log) {
 
     /*
@@ -128,6 +128,11 @@ bool performSchedule(const std::string& race_name, const std::string& base_dir, 
     if (!MoveFile(FLAGS_tmp_random_log, out_dir + "/log.random.data")) return false;
     if (!MoveFile(FLAGS_tmp_status_log, out_dir + "/status.data")) return false;
 
+    if (system(StringPrintf("echo \"%s\" > %s/origin", origin.c_str(), out_dir.c_str()).c_str()) != 0) {
+        fprintf(stderr, "Could not create origin file\n");
+        return false;
+    }
+
     // Output
 
     *executed_race_dir = out_dir;
@@ -151,12 +156,14 @@ typedef struct EATEntry_t {
                RaceID race_id,
                ScheduleSuffix schedule_suffix,
                ExecutableSchedule executable_schedule,
-               std::tr1::shared_ptr<TraceReorder> reorder)
+               std::tr1::shared_ptr<TraceReorder> reorder,
+               const std::string& origin)
         : base_race_output_dir(base_race_output_dir)
         , race_id(race_id)
         , schedule_suffix(schedule_suffix)
         , executable_schedule(executable_schedule)
         , reorder(reorder)
+        , origin(origin)
     {
     }
 
@@ -165,6 +172,7 @@ typedef struct EATEntry_t {
     ScheduleSuffix schedule_suffix;
     ExecutableSchedule executable_schedule;
     std::tr1::shared_ptr<TraceReorder> reorder;
+    std::string origin;
 
 } EATEntry;
 
@@ -265,7 +273,7 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
     ExecutableSchedule init_executable_schedule = init_reorder->GetSchedule();
     Schedule init_schedule = init_reorder->RemoveSpecialMarkers(init_executable_schedule);
 
-    EATEntry init_eat(initial_base_dir, -1, init_schedule, init_executable_schedule, init_reorder);
+    EATEntry init_eat(initial_base_dir, -1, init_schedule, init_executable_schedule, init_reorder, "");
 
     State* initial_state = new State();
     initial_state->depth = -1;
@@ -288,10 +296,13 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
 
             // Step 4 -- Execute new schedule
 
-            ++successful_reverses;
+            if (next_eat->race_id != -1) {
+                // don't count the initial execution
+                ++successful_reverses;
+            }
 
             std::string new_name = next_eat->race_id == -1 ? "base" : StringPrintf("%s_race%d", state->name.c_str(), next_eat->race_id);
-            fprintf(stderr, "Reordering \"%s\" at depth %d (limit %d): ", new_name.c_str(), state->depth, FLAGS_conflict_reversal_bound);
+            fprintf(stderr, "Reordering \"%s\" at depth %d (limit %d) offset %d: ", new_name.c_str(), state->depth, FLAGS_conflict_reversal_bound, (int)stack.size() - 1);
 
             next_eat->reorder->SaveSchedule(FLAGS_tmp_new_schedule_file.c_str(), next_eat->executable_schedule);
 
@@ -301,7 +312,7 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
 
             state->visited.insert(next_eat->schedule_suffix[0]);
 
-            if (performSchedule(new_name, next_eat->base_race_output_dir, FLAGS_tmp_new_schedule_file.c_str(),
+            if (performSchedule(new_name, next_eat->origin, next_eat->base_race_output_dir, FLAGS_tmp_new_schedule_file.c_str(),
                                 &executed_base_dir, &executed_schedule_log, &executed_er_log)) {
 
                 ++successful_schedules;
@@ -386,7 +397,7 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
                             ExecutableSchedule pending_executable_schedule;
                             new_reorder->GetScheduleFromRace(vinfo, race_id, new_race_app.graph(), options, &pending_executable_schedule);
                             ScheduleSuffix pending_schedule = new_reorder->RemoveSpecialMarkers(pending_executable_schedule);
-                            EATEntry pending_entry(executed_base_dir, race_id, pending_schedule, pending_executable_schedule, new_reorder);
+                            EATEntry pending_entry(executed_base_dir, race_id, pending_schedule, pending_executable_schedule, new_reorder, new_name);
 
                             EATMerge(&stack, 0, pending_entry);
 
