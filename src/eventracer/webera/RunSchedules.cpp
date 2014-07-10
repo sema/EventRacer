@@ -301,7 +301,7 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
                 ++successful_reverses;
             }
 
-            std::string new_name = next_eat->race_id == -1 ? "base" : StringPrintf("%s_race%d", state->name.c_str(), next_eat->race_id);
+            std::string new_name = next_eat->race_id == -1 ? "base" : StringPrintf("%s_race%d", next_eat->origin.c_str(), next_eat->race_id);
             fprintf(stdout, "Reordering \"%s\" at depth %d (limit %d) offset %d: \n", new_name.c_str(), state->depth, FLAGS_conflict_reversal_bound, (int)stack.size() - 1);
 
             next_eat->reorder->SaveSchedule(FLAGS_tmp_new_schedule_file.c_str(), next_eat->executable_schedule);
