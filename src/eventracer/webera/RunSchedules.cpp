@@ -91,6 +91,7 @@ bool performSchedule(const std::string& race_name, const std::string& origin, co
      * - The path to the ER action log
      */
 
+    setbuf(stdout, NULL);
 
     *executed_race_dir = "";
     *executed_schedule_log = "";
@@ -349,15 +350,21 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
 
                 // Step 3 -- update EATs
 
+                fprintf(stdout, "Updating EATs... ");
+
                 TraceReorder::Options options;
                 options.include_change_marker = true;
                 options.relax_replay_after_all_races = true;
 
                 const VarsInfo& vinfo = new_race_app.vinfo();
 
-                std::map<int, std::map<int, std::vector<int> > > raceMap; // <event1, event2> => [race ...]
+                // Build raceMatrix for quick "does x and y race" lookups
 
-                // Build raceMap for quick "does x and y race" lookups
+                int max = new_race_app.graph().numNodes();
+                std::vector<bool> yRaceMatrix(max, false); // something races with y <=> y bit is high
+                std::vector<bool> xyRaceMatrix(max*max, false); // x races with y <=> x*y bit is high
+                std::map<std::pair<int, int>, std::vector<int> > raceMap; // <event1, event2> => [race ...]
+
                 for (size_t race_id = 0; race_id < vinfo.races().size(); ++race_id) {
 
                     const VarsInfo::RaceInfo& race = vinfo.races()[race_id];
@@ -365,8 +372,11 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
                     // Ignore covered races
                     if (!race.m_multiParentRaces.empty() || race.m_coveredBy != -1) continue;
 
-                    std::map<int, std::vector<int> >& racing = raceMap[race.m_event2];
-                    std::vector<int>& races = racing[race.m_event1];
+                    yRaceMatrix[race.m_event2] = true;
+                    xyRaceMatrix[race.m_event1*race.m_event2] = true;
+
+                    std::pair<int, int> key(race.m_event1, race.m_event2);
+                    std::vector<int>& races = raceMap[key];
                     races.push_back(race_id);
                 }
 
@@ -377,16 +387,21 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
                     }
 
                     int event2 = state->schedule[i];
-                    std::map<int, std::vector<int> >& racing = raceMap[event2];
 
-                    if (racing.size() == 0) {
+                    if (!yRaceMatrix[event2]) {
                         continue;
                     }
 
                     for (int j = i - 1; j >= 0; --j) {
 
                         int event1 = state->schedule[j];
-                        std::vector<int>& races = racing[event1];
+
+                        if (!xyRaceMatrix[event1*event2]) {
+                            continue;
+                        }
+
+                        std::pair<int, int> key(event1, event2);
+                        std::vector<int>& races = raceMap[key];
 
                         if (!races.empty()) {
 
@@ -400,12 +415,12 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
                             EATEntry pending_entry(executed_base_dir, race_id, pending_schedule, pending_executable_schedule, new_reorder, new_name);
 
                             EATMerge(&stack, 0, pending_entry);
-
-                            break;
                         }
                     }
 
                 }
+
+                fprintf(stdout, "DONE\n");
 
             } // End successful execution
 
