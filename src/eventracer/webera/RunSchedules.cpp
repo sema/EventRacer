@@ -68,6 +68,8 @@ DEFINE_string(out_dir, "/tmp/outdir",
 
 DEFINE_int32(conflict_reversal_bound, 1,
         "Conflict-reversal bound.");
+DEFINE_int32(iteration_bound, -1,
+        "Maximum number of iterations. Use -1 for no limit.");
 
 namespace {
 
@@ -283,7 +285,7 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
 
     stack.push_back(initial_state);
 
-    while (!stack.empty()) {
+    while (!stack.empty() && FLAGS_iteration_bound > successful_reverses) {
 
         State* state = stack.back();
 
@@ -435,6 +437,10 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
 
         }
 
+    }
+
+    if (FLAGS_iteration_bound <= successful_reverses) {
+        printf("WARNING: Stopped iteration: Iteration limit reached.\n");
     }
 
     printf("Tried %d schedules. %d generated, %d successful\n",
