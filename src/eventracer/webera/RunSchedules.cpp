@@ -71,6 +71,9 @@ DEFINE_int32(conflict_reversal_bound, 1,
 DEFINE_int32(iteration_bound, -1,
         "Maximum number of iterations. Use -1 for no limit.");
 
+DEFINE_bool(use_sleepsets, false,
+        "Use sleep sets");
+
 namespace {
 
 bool MoveFile(const std::string& file, const std::string& out_dir) {
@@ -189,6 +192,7 @@ typedef struct {
     int depth;
     std::set<StrictEventID> visited;
     Schedule schedule;
+    std::set<StrictEventID> sleepSet;
 
 } State;
 
@@ -324,43 +328,9 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
                 new_reorder->LoadSchedule(executed_schedule_log.c_str());
                 RaceApp new_race_app(0, executed_er_log, false);
 
-                // Step 1 & Step 2 -- push states
-
-                ExecutableSchedule executed_schedule = new_reorder->GetSchedule();
-                Schedule schedule = new_reorder->RemoveSpecialMarkers(executed_schedule);
-
-                size_t old_state_index = stack.size() - 1;
-
-                int new_depth = state->depth + 1;
-
-                // The stack should be a prefix of executed_schedule (with an empty zero element).
-                for (size_t i = stack.size()-1; i < schedule.size(); ++i) {
-                    State* new_state = new State();
-                    new_state->depth = new_depth;
-                    new_state->name = new_name;
-
-                    new_state->schedule = state->schedule;
-                    new_state->schedule.push_back(schedule[i]);
-
-                    state->visited.insert(schedule[i]);
-
-                    stack.push_back(new_state);
-                    state = stack.back();
-                }
-
-                EATPropagate(&stack, old_state_index);
-
-                // Step 3 -- update EATs
-
-                fprintf(stdout, "Updating EATs... ");
-
-                TraceReorder::Options options;
-                options.include_change_marker = true;
-                options.relax_replay_after_all_races = true;
+                // Build raceMatrix for quick "does x and y race" lookups
 
                 const VarsInfo& vinfo = new_race_app.vinfo();
-
-                // Build raceMatrix for quick "does x and y race" lookups
 
                 int max = new_race_app.graph().numNodes();
                 std::vector<bool> yRaceMatrix(max, false); // something races with y <=> y bit is high
@@ -381,6 +351,53 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
                     std::vector<int>& races = raceMap[key];
                     races.push_back(race_id);
                 }
+
+                // Step 1 & Step 2 -- push states
+
+                ExecutableSchedule executed_schedule = new_reorder->GetSchedule();
+                Schedule schedule = new_reorder->RemoveSpecialMarkers(executed_schedule);
+
+                size_t old_state_index = stack.size() - 1;
+
+                int new_depth = state->depth + 1;
+
+                // The stack should be a prefix of executed_schedule (with an empty zero element).
+                for (size_t i = stack.size()-1; i < schedule.size(); ++i) {
+                    StrictEventID new_event_id = schedule[i];
+
+                    State* new_state = new State();
+                    new_state->depth = new_depth;
+                    new_state->name = new_name;
+
+                    new_state->schedule = state->schedule;
+                    new_state->schedule.push_back(new_event_id);
+
+                    if (FLAGS_use_sleepsets) {
+                        std::set<StrictEventID>::iterator it = state->sleepSet.begin();
+                        for (; it != state->sleepSet.end(); ++it) {
+                            if (!xyRaceMatrix[*it * new_event_id]) {
+                                new_state->sleepSet.insert(*it);
+                            }
+                        }
+
+                        state->sleepSet.insert(new_event_id);
+                    }
+
+                    state->visited.insert(new_event_id);
+
+                    stack.push_back(new_state);
+                    state = stack.back();
+                }
+
+                EATPropagate(&stack, old_state_index);
+
+                // Step 3 -- update EATs
+
+                fprintf(stdout, "Updating EATs... ");
+
+                TraceReorder::Options options;
+                options.include_change_marker = true;
+                options.relax_replay_after_all_races = true;
 
                 for (int i = state->schedule.size() - 1; i >= 0; --i) {
 
