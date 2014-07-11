@@ -285,7 +285,7 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
 
     stack.push_back(initial_state);
 
-    while (!stack.empty() && FLAGS_iteration_bound > successful_reverses) {
+    while (!stack.empty() && (FLAGS_iteration_bound == -1 || FLAGS_iteration_bound > successful_reverses)) {
 
         State* state = stack.back();
 
@@ -439,7 +439,7 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
 
     }
 
-    if (FLAGS_iteration_bound <= successful_reverses) {
+    if (FLAGS_iteration_bound != -1 && FLAGS_iteration_bound <= successful_reverses) {
         printf("WARNING: Stopped iteration: Iteration limit reached.\n");
     }
 
