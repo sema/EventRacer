@@ -163,13 +163,15 @@ typedef struct EATEntry_t {
                ScheduleSuffix schedule_suffix,
                ExecutableSchedule executable_schedule,
                std::tr1::shared_ptr<TraceReorder> reorder,
-               const std::string& origin)
+               const std::string& origin,
+               size_t depth)
         : base_race_output_dir(base_race_output_dir)
         , race_id(race_id)
         , schedule_suffix(schedule_suffix)
         , executable_schedule(executable_schedule)
         , reorder(reorder)
         , origin(origin)
+        , depth(depth)
     {
     }
 
@@ -179,6 +181,7 @@ typedef struct EATEntry_t {
     ExecutableSchedule executable_schedule;
     std::tr1::shared_ptr<TraceReorder> reorder;
     std::string origin;
+    size_t depth;
 
 } EATEntry;
 
@@ -280,10 +283,10 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
     ExecutableSchedule init_executable_schedule = init_reorder->GetSchedule();
     Schedule init_schedule = init_reorder->RemoveSpecialMarkers(init_executable_schedule);
 
-    EATEntry init_eat(initial_base_dir, -1, init_schedule, init_executable_schedule, init_reorder, "");
+    EATEntry init_eat(initial_base_dir, -1, init_schedule, init_executable_schedule, init_reorder, "", 0);
 
     State* initial_state = new State();
-    initial_state->depth = -1;
+    initial_state->depth = 0;
     initial_state->name = "";
     initial_state->eat.push_back(init_eat);
 
@@ -359,14 +362,12 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
 
                 size_t old_state_index = stack.size() - 1;
 
-                int new_depth = state->depth + 1;
-
                 // The stack should be a prefix of executed_schedule (with an empty zero element).
                 for (size_t i = stack.size()-1; i < schedule.size(); ++i) {
                     StrictEventID new_event_id = schedule[i];
 
                     State* new_state = new State();
-                    new_state->depth = new_depth;
+                    new_state->depth = next_eat->depth;
                     new_state->name = new_name;
 
                     new_state->schedule = state->schedule;
@@ -431,7 +432,7 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
                             ExecutableSchedule pending_executable_schedule;
                             new_reorder->GetScheduleFromRace(vinfo, race_id, new_race_app.graph(), options, &pending_executable_schedule);
                             ScheduleSuffix pending_schedule = new_reorder->RemoveSpecialMarkers(pending_executable_schedule);
-                            EATEntry pending_entry(executed_base_dir, race_id, pending_schedule, pending_executable_schedule, new_reorder, new_name);
+                            EATEntry pending_entry(executed_base_dir, race_id, pending_schedule, pending_executable_schedule, new_reorder, new_name, state->depth+1);
 
                             EATMerge(&stack, 0, pending_entry);
                         }
