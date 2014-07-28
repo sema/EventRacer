@@ -50,14 +50,24 @@ public:
             int race_id,
 			const SimpleDirectedGraph& graph,
 			const Options& options,
-			std::vector<int>* schedule) const;
+            std::vector<int>* schedule);
 
     std::vector<int> GetSchedule() const;
     std::vector<size_t> RemoveSpecialMarkers(const std::vector<int>& schedule);
 
     void SaveSchedule(const char* filename, const std::vector<int>& schedule) const;
 
+    size_t get_first_index() const {
+        return m_first_index;
+    }
+
+    size_t get_second_index() const {
+        return m_second_index;
+    }
+
 private:
+    size_t m_first_index;
+    size_t m_second_index;
 	std::vector<std::string> m_actions;
     std::vector<int> m_schedule;
 };

@@ -112,7 +112,25 @@ bool performSchedule(const std::string& race_name, const std::string& origin, co
 
     if (system(command.c_str()) != 0) {
 		fprintf(stderr, "Could not run command: %s\n", command.c_str());
-		return false;
+
+        std::string out_dir = StringPrintf("%s/_%s", FLAGS_out_dir.c_str(), race_name.c_str());
+
+        // Move result files
+
+        if (system(StringPrintf("mkdir -p %s", out_dir.c_str()).c_str()) != 0) {
+            fprintf(stderr, "Could not create output dir %s. Set the flag --out_dir\n", out_dir.c_str());
+            return false;
+        }
+
+        if (!MoveFile(schedule, out_dir)) return false;
+        if (!MoveFile(FLAGS_tmp_stdout, out_dir + "/stdout")) return false;
+
+        if (system(StringPrintf("echo \"%s\" > %s/origin", origin.c_str(), out_dir.c_str()).c_str()) != 0) {
+            fprintf(stderr, "Could not create origin file\n");
+            return false;
+        }
+
+        return false;
 	}
 
     std::string out_dir = StringPrintf("%s/%s", FLAGS_out_dir.c_str(), race_name.c_str());
@@ -195,6 +213,8 @@ typedef struct {
     std::set<StrictEventID> visited;
     Schedule schedule;
     std::set<StrictEventID> sleepSet;
+    bool m_race_first;
+    bool m_race_second;
 
 } State;
 
@@ -287,6 +307,8 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
 
     State* initial_state = new State();
     initial_state->name = "";
+    initial_state->m_race_first = false;
+    initial_state->m_race_second = false;
     initial_state->eat.push_back(init_eat);
 
     stack.push_back(initial_state);
@@ -346,6 +368,7 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
 
                 const VarsInfo& vinfo = new_race_app.vinfo();
 
+                /**
                 std::vector<bool> yRaceMatrix(max, false); // something races with y <=> y bit is high
                 std::vector<bool> xyRaceMatrix(max*max, false); // x races with y <=> x*y bit is high
                 std::map<std::pair<int, int>, std::vector<int> > raceMap; // <event1, event2> => [race ...]
@@ -366,6 +389,7 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
                         races.push_back(race_id);
                     }
                 }
+                **/
 
                 // Step 1 & Step 2 -- push states
 
@@ -381,9 +405,13 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
                     State* new_state = new State();
                     new_state->name = new_name;
 
+                    new_state->m_race_first = (i == next_eat->reorder->get_first_index());
+                    new_state->m_race_second = (i == next_eat->reorder->get_second_index());;
+
                     new_state->schedule = state->schedule;
                     new_state->schedule.push_back(new_event_id);
 
+                    /**
                     if (FLAGS_use_sleepsets) {
                         std::set<StrictEventID>::iterator it = state->sleepSet.begin();
                         for (; it != state->sleepSet.end(); ++it) {
@@ -394,6 +422,7 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
 
                         state->sleepSet.insert(new_event_id);
                     }
+                    **/
 
                     state->visited.insert(new_event_id);
 
@@ -423,6 +452,13 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
 
                     if (eventToStackIndex[race.m_event2] < old_state_index) {
                         continue; // Do not re-insert races with events we have already explored.
+                    }
+
+                    if (eventToStackIndex[race.m_event2] - eventToStackIndex[race.m_event1] == 1 &&
+                            stack.at(eventToStackIndex[race.m_event1])->m_race_first &&
+                            stack.at(eventToStackIndex[race.m_event2])->m_race_second) {
+                        continue; // Do not reverse the race we have just explored
+                        // Small optimization, a form limit sleep set
                     }
 
                     if (current_depth < FLAGS_conflict_reversal_bound) {

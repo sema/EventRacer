@@ -26,7 +26,10 @@
 
 #include "VarsInfo.h"
 
-TraceReorder::TraceReorder() {
+TraceReorder::TraceReorder()
+    : m_first_index(0)
+    , m_second_index(0)
+{
 }
 
 TraceReorder::~TraceReorder() {
@@ -78,7 +81,7 @@ bool TraceReorder::GetScheduleFromRace(
         const int race_id,
 		const SimpleDirectedGraph& graph,
 		const Options& options,
-        std::vector<int>* new_schedule) const {
+        std::vector<int>* new_schedule) {
 
     if (race_id < 0) {
         *new_schedule = m_schedule;
@@ -159,6 +162,9 @@ bool TraceReorder::GetScheduleFromRace(
     }
 
     // <change> marker
+
+    m_first_index = new_schedule->size();
+    m_second_index = new_schedule->size()+1;
 
     if (options.include_change_marker) {
         new_schedule->push_back(-2);
