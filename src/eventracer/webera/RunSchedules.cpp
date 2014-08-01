@@ -71,9 +71,6 @@ DEFINE_int32(conflict_reversal_bound, 1,
 DEFINE_int32(iteration_bound, -1,
         "Maximum number of iterations. Use -1 for no limit.");
 
-DEFINE_bool(use_sleepsets, false,
-        "Use sleep sets");
-
 namespace {
 
 bool MoveFile(const std::string& file, const std::string& out_dir) {
@@ -291,6 +288,8 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
     int successful_reverses = 0;
     int successful_schedules = 0;
     int conflict_reversal_pruning = 0;
+    int mini_sleep_set_pruning = 0;
+    int conflict_reversal_dependency_pruning = 0;
 
     std::vector<State*> stack;
     stack.reserve(5000);
@@ -312,16 +311,6 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
     initial_state->eat.push_back(init_eat);
 
     stack.push_back(initial_state);
-
-    size_t max = 0;
-
-    for (size_t i = 0; i < init_schedule.size(); ++i) {
-        if (init_schedule[i] > max) {
-            max = init_schedule[i];
-        }
-    }
-
-    std::vector<int> eventToStackIndex(max+1, -1);
 
     while (!stack.empty() && (FLAGS_iteration_bound == -1 || FLAGS_iteration_bound > successful_reverses)) {
 
@@ -363,33 +352,7 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
                 std::tr1::shared_ptr<TraceReorder> new_reorder = std::tr1::shared_ptr<TraceReorder>(new TraceReorder());
                 new_reorder->LoadSchedule(executed_schedule_log.c_str());
                 RaceApp new_race_app(0, executed_er_log, false);
-
-                // Build raceMatrix for quick "does x and y race" lookups
-
                 const VarsInfo& vinfo = new_race_app.vinfo();
-
-                /**
-                std::vector<bool> yRaceMatrix(max, false); // something races with y <=> y bit is high
-                std::vector<bool> xyRaceMatrix(max*max, false); // x races with y <=> x*y bit is high
-                std::map<std::pair<int, int>, std::vector<int> > raceMap; // <event1, event2> => [race ...]
-
-                if (FLAGS_use_sleepsets) {
-                    for (size_t race_id = 0; race_id < vinfo.races().size(); ++race_id) {
-
-                        const VarsInfo::RaceInfo& race = vinfo.races()[race_id];
-
-                        // Ignore covered races
-                        if (!race.m_multiParentRaces.empty() || race.m_coveredBy != -1) continue;
-
-                        yRaceMatrix[race.m_event2] = true;
-                        xyRaceMatrix[race.m_event1*race.m_event2] = true;
-
-                        std::pair<int, int> key(race.m_event1, race.m_event2);
-                        std::vector<int>& races = raceMap[key];
-                        races.push_back(race_id);
-                    }
-                }
-                **/
 
                 // Step 1 & Step 2 -- push states
 
@@ -397,39 +360,37 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
                 Schedule schedule = new_reorder->RemoveSpecialMarkers(executed_schedule);
 
                 int old_state_index = stack.size() - 1;
+                int old_schedule_index = old_state_index - 1; // CAN BE -1 in the first iteration
 
-                // The stack should be a prefix of executed_schedule (with an empty zero element).
-                for (size_t i = stack.size()-1; i < schedule.size(); ++i) {
+                // The stack should be a prefix of executed_schedule
+                // (with an empty zero element)
+                // (and the prefix could have different event IDs).
+
+                std::vector<int> eventToStackIndex(8000, -1);
+
+                for (size_t i = 0; i < schedule.size(); ++i) {
+                    if (eventToStackIndex.size()-1 < schedule[i]) {
+                        eventToStackIndex.resize(eventToStackIndex.size()*2, -1);
+                    }
+                    eventToStackIndex[schedule[i]] = i+1;
+                }
+
+                for (size_t i = old_schedule_index+1; i < schedule.size(); ++i) {
                     StrictEventID new_event_id = schedule[i];
 
                     State* new_state = new State();
                     new_state->name = new_name;
 
                     new_state->m_race_first = (i == next_eat->reorder->get_first_index());
-                    new_state->m_race_second = (i == next_eat->reorder->get_second_index());;
+                    new_state->m_race_second = (i == next_eat->reorder->get_second_index());
 
                     new_state->schedule = state->schedule;
                     new_state->schedule.push_back(new_event_id);
-
-                    /**
-                    if (FLAGS_use_sleepsets) {
-                        std::set<StrictEventID>::iterator it = state->sleepSet.begin();
-                        for (; it != state->sleepSet.end(); ++it) {
-                            if (!xyRaceMatrix[*it * new_event_id]) {
-                                new_state->sleepSet.insert(*it);
-                            }
-                        }
-
-                        state->sleepSet.insert(new_event_id);
-                    }
-                    **/
 
                     state->visited.insert(new_event_id);
 
                     stack.push_back(new_state);
                     state = stack.back();
-
-                    eventToStackIndex[new_event_id] = stack.size()-1;
                 }
 
                 int current_depth = next_eat->depth;
@@ -450,34 +411,39 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
                     // Ignore covered races
                     if (!race.m_multiParentRaces.empty() || race.m_coveredBy != -1) continue;
 
-                    if (eventToStackIndex[race.m_event2] < old_state_index) {
-                        continue; // Do not re-insert races with events we have already explored.
+                    // Conflict-reversal depth pruning
+                    if (current_depth >= FLAGS_conflict_reversal_bound) {
+                        ++conflict_reversal_pruning;
+                        continue;
                     }
 
+                    // Do not re-insert races with events we have already explored.
+                    MixedEventId event_prior_to_reversal = old_schedule_index != -1 ? (int)schedule[old_schedule_index] : -1;
+                    if (event_prior_to_reversal > race.m_event2) {  // event ids are sequential
+                        continue;
+                    }
+
+                    // Do not reverse the race we have just explored
+                    // Small optimization, a form of limit sleep set
                     if (eventToStackIndex[race.m_event2] - eventToStackIndex[race.m_event1] == 1 &&
                             stack.at(eventToStackIndex[race.m_event1])->m_race_first &&
                             stack.at(eventToStackIndex[race.m_event2])->m_race_second) {
-                        continue; // Do not reverse the race we have just explored
-                        // Small optimization, a form limit sleep set
+                        ++mini_sleep_set_pruning;
+                        continue;
                     }
 
-                    if (current_depth < FLAGS_conflict_reversal_bound) {
+                    ++all_schedules;
 
-                        ++all_schedules;
+                    ExecutableSchedule pending_executable_schedule;
+                    new_reorder->GetScheduleFromRace(vinfo, race_id, new_race_app.graph(), options, &pending_executable_schedule);
+                    Schedule pending_schedule = new_reorder->RemoveSpecialMarkers(pending_executable_schedule);
 
-                        ExecutableSchedule pending_executable_schedule;
-                        new_reorder->GetScheduleFromRace(vinfo, race_id, new_race_app.graph(), options, &pending_executable_schedule);
+                    ScheduleSuffix pending_schedule_suffix(pending_schedule.begin() + eventToStackIndex[race.m_event1]-1, pending_schedule.end());
 
-                        Schedule pending_schedule = new_reorder->RemoveSpecialMarkers(pending_executable_schedule);
-                        ScheduleSuffix pending_schedule_suffix(pending_schedule.begin() + eventToStackIndex[race.m_event1]-1, pending_schedule.end());
+                    EATEntry pending_entry(executed_base_dir, race_id, pending_schedule_suffix, pending_executable_schedule, new_reorder, new_name, current_depth+1);
 
-                        EATEntry pending_entry(executed_base_dir, race_id, pending_schedule_suffix, pending_executable_schedule, new_reorder, new_name, current_depth+1);
+                    EATMerge(&stack, eventToStackIndex[race.m_event1]-1, pending_entry);
 
-                        EATMerge(&stack, eventToStackIndex[race.m_event1]-1, pending_entry);
-
-                    } else {
-                        ++conflict_reversal_pruning;
-                    }
                 }
 
                 fprintf(stdout, "DONE\n");
@@ -502,6 +468,8 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
     }
 
     printf("Statistics: conflict-reversal-pruning: %d\n", conflict_reversal_pruning);
+    printf("Statistics: mini-sleep-set-pruning: %d\n", mini_sleep_set_pruning);
+    printf("Statistics: conflict-reversal-dependency-pruning: %d\n", conflict_reversal_dependency_pruning);
     printf("Tried %d schedules. %d generated, %d successful\n",
             all_schedules, successful_reverses, successful_schedules);
 
