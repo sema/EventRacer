@@ -26,4 +26,5 @@ TARGET_LINK_LIBRARIES(webera eventracer_webapp eventracer_webera)
 ADD_EXECUTABLE(run_schedules RunSchedules.cpp)
 TARGET_LINK_LIBRARIES(run_schedules eventracer_webapp eventracer_webera)
 
-
+ADD_EXECUTABLE(wave RunWAVE.cpp)
+TARGET_LINK_LIBRARIES(wave eventracer_webapp eventracer_webera)
