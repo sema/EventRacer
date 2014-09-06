@@ -40,6 +40,8 @@ DEFINE_string(site, "", "The website to replay");
 
 DEFINE_string(replay_command, "/home/veselin/gitwk/WebERA/R5/clients/Replay/bin/replay %s %s -in_dir %s",
 		"Command to run replay with twice %s for the site and the replay file.");
+DEFINE_string(query_command, "/home/semadk/src/github/srl/WebERA/R4/utils/batch-report/report.py query %s %s",
+        "Command to query/analyze the outcome of executing an event sequence.");
 
 DEFINE_string(tmp_new_schedule_file, "/tmp/new_schedule.data",
         "Filename with the new schedule to be executed.");
@@ -67,14 +69,16 @@ DEFINE_string(tmp_status_log, "/tmp/status.data",
 DEFINE_string(out_dir, "/tmp/outdir",
         "Location of the output.");
 
-DEFINE_bool(conflict_reversal_bound_oldstyle, true,
+DEFINE_bool(conflict_reversal_bound_oldstyle, false,
         "Use the original conflict-reversal bound calculation style");
 DEFINE_int32(conflict_reversal_bound, 1,
         "Conflict-reversal bound.");
 DEFINE_int32(iteration_bound, -1,
         "Maximum number of iterations. Use -1 for no limit.");
 
-DEFINE_bool(same_state_reversal_opt, false,
+DEFINE_bool(fast_forward, true,
+        "Apply fast-forward optimization.");
+DEFINE_bool(same_state_reversal_opt, true,
         "Apply the same-state-reversal optimization.");
 
 namespace {
@@ -87,8 +91,36 @@ bool MoveFile(const std::string& file, const std::string& out_dir) {
 	return true;
 }
 
+bool queryOutcome(const std::string& race_name) {
+
+    if (!FLAGS_same_state_reversal_opt) {
+        return false;
+    }
+
+    std::string query_command;
+    StringAppendF(&query_command, FLAGS_query_command.c_str(), FLAGS_out_dir.c_str(), race_name.c_str());
+
+    FILE* query = popen(query_command.c_str(), "r");
+
+    if (!query) {
+        fprintf(stderr, "Could not run command: %s\n", query_command.c_str());
+        return false;
+    }
+
+    char buffer[1024];
+    char* output = fgets(buffer, sizeof(buffer), query);
+
+    pclose(query);
+
+    if (strcmp(output, "LOW\n") == 0) {
+        return true;
+    }
+
+    return false;
+}
+
 bool performSchedule(const std::string& race_name, const std::string& origin, const std::string& base_dir, const std::string& schedule,
-                     std::string* executed_race_dir, std::string* executed_schedule_log, std::string* executed_er_log) {
+                     std::string* executed_race_dir, std::string* executed_schedule_log, std::string* executed_er_log, bool* executed_reversal_is_benign) {
 
     /*
      * Executes replay command supplying the base dir with recorded data, URL, and path to the schedule.
@@ -104,25 +136,34 @@ bool performSchedule(const std::string& race_name, const std::string& origin, co
     *executed_race_dir = "";
     *executed_schedule_log = "";
     *executed_er_log = "";
+    *executed_reversal_is_benign = false;
 
     std::string out_dir = StringPrintf("%s/%s", FLAGS_out_dir.c_str(), race_name.c_str());
 
     struct stat st;
-    if (stat(out_dir, &st) == 0 && (st.st_mode & S_IFDIR) == S_IFDIR) {
+    if (FLAGS_fast_forward && stat(out_dir.c_str(), &st) == 0 && (st.st_mode & S_IFDIR) == S_IFDIR) {
 
         *executed_race_dir = out_dir;
         *executed_schedule_log = StringPrintf("%s/%s", out_dir.c_str(), "schedule.data");
         *executed_er_log = StringPrintf("%s/%s", out_dir.c_str(), "ER_actionlog");
 
-        fprintf(stdout, "Fast-forward execution.\n");
+        if (stat(executed_schedule_log->c_str(), &st) == 0 && (st.st_mode & S_IFREG) == S_IFREG &&
+                stat(executed_er_log->c_str(), &st) == 0 && (st.st_mode & S_IFREG) == S_IFREG) {
 
-        if (stat(*executed_schedule_log, &st) == 0 && (st.st_mode & S_IFREG) == S_IFREG &&
-                stat(*executed_er_log, &st) == 0 && (st.st_mode & S_IFREG) == S_IFREG) {
+            *executed_reversal_is_benign = queryOutcome(race_name);
 
             fprintf(stdout, "Fast-forward execution.\n");
-
             return true;
         }
+    }
+
+    std::string error_out_dir = StringPrintf("%s/_%s", FLAGS_out_dir.c_str(), race_name.c_str());
+
+    if (FLAGS_fast_forward && stat(error_out_dir.c_str(), &st) == 0 && (st.st_mode & S_IFDIR) == S_IFDIR) {
+
+        fprintf(stdout, "Fast-forward (failed) execution.\n");
+        return false;
+
     }
 
     std::string command;
@@ -136,19 +177,17 @@ bool performSchedule(const std::string& race_name, const std::string& origin, co
     if (system(command.c_str()) != 0) {
 		fprintf(stderr, "Could not run command: %s\n", command.c_str());
 
-        std::string out_dir = StringPrintf("%s/_%s", FLAGS_out_dir.c_str(), race_name.c_str());
-
         // Move result files
 
-        if (system(StringPrintf("mkdir -p %s", out_dir.c_str()).c_str()) != 0) {
-            fprintf(stderr, "Could not create output dir %s. Set the flag --out_dir\n", out_dir.c_str());
+        if (system(StringPrintf("mkdir -p %s", error_out_dir.c_str()).c_str()) != 0) {
+            fprintf(stderr, "Could not create output dir %s. Set the flag --out_dir\n", error_out_dir.c_str());
             return false;
         }
 
-        if (!MoveFile(schedule, out_dir)) return false;
-        if (!MoveFile(FLAGS_tmp_stdout, out_dir + "/stdout")) return false;
+        if (!MoveFile(schedule, error_out_dir)) return false;
+        if (!MoveFile(FLAGS_tmp_stdout, error_out_dir + "/stdout")) return false;
 
-        if (system(StringPrintf("echo \"%s\" > %s/origin", origin.c_str(), out_dir.c_str()).c_str()) != 0) {
+        if (system(StringPrintf("echo \"%s\" > %s/origin", origin.c_str(), error_out_dir.c_str()).c_str()) != 0) {
             fprintf(stderr, "Could not create origin file\n");
             return false;
         }
@@ -183,6 +222,7 @@ bool performSchedule(const std::string& race_name, const std::string& origin, co
     *executed_race_dir = out_dir;
     *executed_schedule_log = StringPrintf("%s/%s", out_dir.c_str(), "schedule.data");
     *executed_er_log = StringPrintf("%s/%s", out_dir.c_str(), "ER_actionlog");
+    *executed_reversal_is_benign = queryOutcome(race_name);
 
 	return true;
 }
@@ -372,11 +412,12 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
             std::string executed_base_dir;
             std::string executed_schedule_log;
             std::string executed_er_log;
+            bool executed_reversal_is_benign;
 
             state->visited.insert(next_eat->schedule_suffix[0]);
 
             if (performSchedule(new_name, next_eat->origin, next_eat->base_race_output_dir, FLAGS_tmp_new_schedule_file.c_str(),
-                                &executed_base_dir, &executed_schedule_log, &executed_er_log)) {
+                                &executed_base_dir, &executed_schedule_log, &executed_er_log, &executed_reversal_is_benign)) {
 
                 if (next_eat->race_id != -1) {
                     ++successful_schedules;
@@ -478,7 +519,7 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
                         continue;
                     }
 
-                    if (FLAGS_same_state_reversal_opt && reversal_is_benign &&
+                    if (FLAGS_same_state_reversal_opt && executed_reversal_is_benign &&
                             !stack.at(eventToStackIndex[race.m_event1])->m_race_first &&
                             !stack.at(eventToStackIndex[race.m_event1])->m_race_second &&
                             !stack.at(eventToStackIndex[race.m_event2])->m_race_first &&
