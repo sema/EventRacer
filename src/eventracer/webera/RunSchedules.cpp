@@ -22,6 +22,7 @@
 #include <vector>
 #include <tr1/memory>
 #include <tr1/shared_ptr.h>
+#include <sys/stat.h>
 
 #include "gflags/gflags.h"
 
@@ -66,10 +67,15 @@ DEFINE_string(tmp_status_log, "/tmp/status.data",
 DEFINE_string(out_dir, "/tmp/outdir",
         "Location of the output.");
 
+DEFINE_bool(conflict_reversal_bound_oldstyle, true,
+        "Use the original conflict-reversal bound calculation style");
 DEFINE_int32(conflict_reversal_bound, 1,
         "Conflict-reversal bound.");
 DEFINE_int32(iteration_bound, -1,
         "Maximum number of iterations. Use -1 for no limit.");
+
+DEFINE_bool(same_state_reversal_opt, false,
+        "Apply the same-state-reversal optimization.");
 
 namespace {
 
@@ -98,6 +104,26 @@ bool performSchedule(const std::string& race_name, const std::string& origin, co
     *executed_race_dir = "";
     *executed_schedule_log = "";
     *executed_er_log = "";
+
+    std::string out_dir = StringPrintf("%s/%s", FLAGS_out_dir.c_str(), race_name.c_str());
+
+    struct stat st;
+    if (stat(out_dir, &st) == 0 && (st.st_mode & S_IFDIR) == S_IFDIR) {
+
+        *executed_race_dir = out_dir;
+        *executed_schedule_log = StringPrintf("%s/%s", out_dir.c_str(), "schedule.data");
+        *executed_er_log = StringPrintf("%s/%s", out_dir.c_str(), "ER_actionlog");
+
+        fprintf(stdout, "Fast-forward execution.\n");
+
+        if (stat(*executed_schedule_log, &st) == 0 && (st.st_mode & S_IFREG) == S_IFREG &&
+                stat(*executed_er_log, &st) == 0 && (st.st_mode & S_IFREG) == S_IFREG) {
+
+            fprintf(stdout, "Fast-forward execution.\n");
+
+            return true;
+        }
+    }
 
     std::string command;
 	StringAppendF(&command, FLAGS_replay_command.c_str(),
@@ -129,8 +155,6 @@ bool performSchedule(const std::string& race_name, const std::string& origin, co
 
         return false;
 	}
-
-    std::string out_dir = StringPrintf("%s/%s", FLAGS_out_dir.c_str(), race_name.c_str());
 
     // Move result files
 
@@ -212,6 +236,7 @@ typedef struct {
     std::set<StrictEventID> sleepSet;
     bool m_race_first;
     bool m_race_second;
+    int old_style_depth;
 
 } State;
 
@@ -284,12 +309,17 @@ void EATPropagate(std::vector<State*>* stack, size_t index) {
 
 void explore(const char* initial_schedule, const char* initial_base_dir) {
 
+    if (FLAGS_conflict_reversal_bound_oldstyle) {
+        fprintf(stdout, "Using old style conflict-reversal bounds\n");
+    }
+
     int all_schedules = 0;
     int successful_reverses = 0;
     int successful_schedules = 0;
     int conflict_reversal_pruning = 0;
     int mini_sleep_set_pruning = 0;
     int conflict_reversal_dependency_pruning = 0;
+    int same_state_reversal_opt = 0;
 
     std::vector<State*> stack;
     stack.reserve(5000);
@@ -309,6 +339,7 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
     initial_state->m_race_first = false;
     initial_state->m_race_second = false;
     initial_state->eat.push_back(init_eat);
+    initial_state->old_style_depth = 0;
 
     stack.push_back(initial_state);
 
@@ -326,7 +357,9 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
 
             // Step 4 -- Execute new schedule
 
-            if (next_eat->race_id != -1) {
+            bool is_initial_execution = next_eat->race_id == -1;
+
+            if (!is_initial_execution) {
                 // don't count the initial execution
                 ++successful_reverses;
             }
@@ -375,6 +408,8 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
                     eventToStackIndex[schedule[i]] = i+1;
                 }
 
+                int new_depth = is_initial_execution ? 0 : state->old_style_depth + 1;
+
                 for (size_t i = old_schedule_index+1; i < schedule.size(); ++i) {
                     StrictEventID new_event_id = schedule[i];
 
@@ -386,6 +421,7 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
 
                     new_state->schedule = state->schedule;
                     new_state->schedule.push_back(new_event_id);
+                    new_state->old_style_depth = new_depth;
 
                     state->visited.insert(new_event_id);
 
@@ -412,8 +448,18 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
                     if (!race.m_multiParentRaces.empty() || race.m_coveredBy != -1) continue;
 
                     // Conflict-reversal depth pruning
-                    if (current_depth >= FLAGS_conflict_reversal_bound) {
+                    if (!FLAGS_conflict_reversal_bound_oldstyle &&
+                            current_depth >= FLAGS_conflict_reversal_bound) {
                         ++conflict_reversal_pruning;
+                        continue;
+                    }
+
+                    // Conflict-reversal depth pruning oldstyle
+                    if (FLAGS_conflict_reversal_bound_oldstyle &&
+                            eventToStackIndex[race.m_event1] > 0 &&
+                            stack[eventToStackIndex[race.m_event1]-1]->old_style_depth >= FLAGS_conflict_reversal_bound) {
+                        ++conflict_reversal_pruning;
+                        printf("Reversing %d<->%d where %d is at index %d with depth %d, old index is %d\n", race.m_event1, race.m_event2, race.m_event1, eventToStackIndex[race.m_event1], stack[eventToStackIndex[race.m_event1]-1]->old_style_depth, old_state_index);
                         continue;
                     }
 
@@ -432,6 +478,15 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
                         continue;
                     }
 
+                    if (FLAGS_same_state_reversal_opt && reversal_is_benign &&
+                            !stack.at(eventToStackIndex[race.m_event1])->m_race_first &&
+                            !stack.at(eventToStackIndex[race.m_event1])->m_race_second &&
+                            !stack.at(eventToStackIndex[race.m_event2])->m_race_first &&
+                            !stack.at(eventToStackIndex[race.m_event2])->m_race_second) {
+                        ++same_state_reversal_opt;
+                        continue;
+                    }
+
                     ++all_schedules;
 
                     ExecutableSchedule pending_executable_schedule;
@@ -441,7 +496,6 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
                     ScheduleSuffix pending_schedule_suffix(pending_schedule.begin() + eventToStackIndex[race.m_event1]-1, pending_schedule.end());
 
                     EATEntry pending_entry(executed_base_dir, race_id, pending_schedule_suffix, pending_executable_schedule, new_reorder, new_name, current_depth+1);
-
                     EATMerge(&stack, eventToStackIndex[race.m_event1]-1, pending_entry);
 
                 }
@@ -470,6 +524,7 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
     printf("Statistics: conflict-reversal-pruning: %d\n", conflict_reversal_pruning);
     printf("Statistics: mini-sleep-set-pruning: %d\n", mini_sleep_set_pruning);
     printf("Statistics: conflict-reversal-dependency-pruning: %d\n", conflict_reversal_dependency_pruning);
+    printf("Statistics: same-state-reversal-pruning: %d\n", same_state_reversal_opt);
     printf("Tried %d schedules. %d generated, %d successful\n",
             all_schedules, successful_reverses, successful_schedules);
 
