@@ -32,12 +32,18 @@
 #include "TimerGraph.h"
 #include "ThreadMapping.h"
 #include "JsViewer.h"
+#include "TracePreprocess.h"
+
+#include "gflags/gflags.h"
 
 #include <string.h>
 
 #include <algorithm>
 #include <utility>
 #include <queue>
+
+DEFINE_bool(use_race_filters, true,
+        "Race filters removes races on commuting operations.");
 
 using std::string;
 
@@ -165,6 +171,18 @@ RaceApp::RaceApp(int64 app_id, const std::string& actionLogFile, bool can_drop_n
 	}
 	fclose(f);
 	fprintf(stderr, "DONE\n");
+
+    // Filter actions
+
+    TracePreprocess preprocess(&m_actions);
+
+    if (FLAGS_use_race_filters) {
+        preprocess.RemoveEmptyReadWrites();
+        preprocess.RemoveNopWrites();
+        //preprocess.RemoveUpdatesInSameMethod();
+    }
+
+    // End filter actions
 
 	m_inputEventGraph.addNodesUpTo(m_actions.maxEventActionId());
 	int num_arcs = 0;

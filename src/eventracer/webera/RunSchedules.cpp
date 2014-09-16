@@ -78,7 +78,7 @@ DEFINE_int32(iteration_bound, -1,
 
 DEFINE_bool(fast_forward, true,
         "Apply fast-forward optimization.");
-DEFINE_bool(same_state_reversal_opt, true,
+DEFINE_bool(same_state_reversal_opt, false,
         "Apply the same-state-reversal optimization.");
 
 namespace {

@@ -12,12 +12,14 @@ SET(RACES_H
     BitClocks.h
     EventGraph.h
     ThreadMapping.h
-    VarsInfo.h)
+    VarsInfo.h
+    TracePreprocess.h)
 SET(RACES_CPP
-	BitClocks.cpp
+    BitClocks.cpp
     EventGraph.cpp
     ThreadMapping.cpp
-    VarsInfo.cpp)
+    VarsInfo.cpp
+    TracePreprocess.cpp)
 
 ADD_LIBRARY(eventracer_races ${RACES_H} ${RACES_CPP})
 TARGET_LINK_LIBRARIES(eventracer_races eventracer_input base util gflags.a)
