@@ -18,7 +18,155 @@
 
 #include <stddef.h>
 #include <stdio.h>
+#include <sstream>
 #include <map>
+
+void TracePreprocess::RemoveGlobalLocals() {
+    std::map<int, int> safe_to_remove;
+
+    int num_ops = m_log->maxEventActionId()  + 1;
+
+    // Find memory locations which are safe for removal
+
+    for (int op_id = 0; op_id < num_ops; ++op_id) {
+        if (m_log->event_action(op_id).m_commands.empty()) continue;  // Avoid adding event actions.
+        ActionLog::EventAction* op = m_log->mutable_event_action(op_id);
+
+        for (size_t cmd_id = 1; cmd_id < op->m_commands.size(); ++cmd_id) {
+            ActionLog::Command& cmd0 = op->m_commands[cmd_id - 1];
+            if (cmd0.m_cmdType != ActionLog::READ_MEMORY && cmd0.m_cmdType != ActionLog::WRITE_MEMORY) continue;
+            ActionLog::Command& cmd1 = op->m_commands[cmd_id - 0];
+            if (cmd1.m_cmdType != ActionLog::MEMORY_VALUE) continue;
+
+            int memory_location = cmd0.m_location;
+            const char* memory_location_char = m_vars->getString(memory_location);
+
+            if (*memory_location_char != 'O' && *memory_location_char != 'A') continue; // only analyze objects and arrays
+
+            if (cmd0.m_cmdType == ActionLog::READ_MEMORY &&
+                    (safe_to_remove.find(memory_location) == safe_to_remove.end() ||
+                    safe_to_remove[memory_location] != op_id)) {
+                // Either a read of an uninitialized value or a read of a value from another operation.
+                // Mark the write operation as unsafe for removal.
+                safe_to_remove[memory_location] = -1;
+            } else {
+                safe_to_remove[memory_location] = op_id;  // record the last operation to access this memory location
+            }
+        }
+    }
+
+    // Remove
+
+    for (int op_id = 0; op_id < num_ops; ++op_id) {
+        if (m_log->event_action(op_id).m_commands.empty()) continue;  // Avoid adding event actions.
+        ActionLog::EventAction* op = m_log->mutable_event_action(op_id);
+
+        for (size_t cmd_id = 1; cmd_id < op->m_commands.size(); ++cmd_id) {
+            ActionLog::Command& cmd0 = op->m_commands[cmd_id - 1];
+            if (cmd0.m_cmdType != ActionLog::READ_MEMORY && cmd0.m_cmdType != ActionLog::WRITE_MEMORY) continue;
+            ActionLog::Command& cmd1 = op->m_commands[cmd_id - 0];
+            if (cmd1.m_cmdType != ActionLog::MEMORY_VALUE) continue;
+
+            int memory_location = cmd0.m_location;
+
+            if (safe_to_remove.find(memory_location) != safe_to_remove.end() &&
+                safe_to_remove[memory_location] != -1) {
+
+                // Mark the operation for deletions.
+                cmd0.m_cmdType = cmd1.m_cmdType = static_cast<ActionLog::CommandType>(-1);
+            }
+        }
+    }
+
+    RemoveEmptyOperations();
+}
+
+void TracePreprocess::RemovePureIncrementation() {
+    std::map<int, bool> safe_to_remove;
+
+    int num_ops = m_log->maxEventActionId()  + 1;
+
+    // Find memory locations which are safe for removal
+
+    for (int op_id = 0; op_id < num_ops; ++op_id) {
+        if (m_log->event_action(op_id).m_commands.empty()) continue;  // Avoid adding event actions.
+        ActionLog::EventAction* op = m_log->mutable_event_action(op_id);
+
+        for (size_t cmd_id = 3; cmd_id < op->m_commands.size(); ++cmd_id) {
+            ActionLog::Command& cmd0 = op->m_commands[cmd_id - 3];
+            if (cmd0.m_cmdType != ActionLog::READ_MEMORY) continue;
+            ActionLog::Command& cmd1 = op->m_commands[cmd_id - 2];
+            if (cmd1.m_cmdType != ActionLog::MEMORY_VALUE) continue;
+
+            // if we see a read, then it must be followed by a write on the same location
+
+            ActionLog::Command& cmd2 = op->m_commands[cmd_id - 1];
+            ActionLog::Command& cmd3 = op->m_commands[cmd_id - 0];
+            if (cmd2.m_cmdType != ActionLog::WRITE_MEMORY ||
+                    cmd3.m_cmdType != ActionLog::MEMORY_VALUE ||
+                    cmd2.m_location != cmd0.m_location) {
+                safe_to_remove[cmd0.m_location] = false;
+                continue;
+            }
+
+            int memory_location = cmd0.m_location;
+            const char* memory_location_char = m_vars->getString(memory_location);
+
+            // only analyze objects, arrays, and JS activation objects
+            if (*memory_location_char != 'O' &&
+                    *memory_location_char != 'A' &&
+                    *memory_location_char != 'J') continue;
+
+            if (safe_to_remove.find(memory_location) == safe_to_remove.end()) {
+                safe_to_remove[memory_location] = true;
+            }
+
+            continue;
+
+            if (safe_to_remove[memory_location] == true) {
+
+                std::string mem_value1 = m_values->getString(cmd1.m_location);
+                std::string mem_value2 = m_values->getString(cmd3.m_location);
+
+                int mem_value1_int;
+                std::istringstream(mem_value1) >> mem_value1_int;
+
+                int mem_value2_int;
+                std::istringstream(mem_value2) >> mem_value2_int;
+
+                // is this an incrementation
+                safe_to_remove[memory_location] = (mem_value1_int == mem_value2_int - 1);
+
+            }
+        }
+    }
+
+    // Remove
+
+    for (int op_id = 0; op_id < num_ops; ++op_id) {
+        if (m_log->event_action(op_id).m_commands.empty()) continue;  // Avoid adding event actions.
+        ActionLog::EventAction* op = m_log->mutable_event_action(op_id);
+
+        for (size_t cmd_id = 1; cmd_id < op->m_commands.size(); ++cmd_id) {
+            ActionLog::Command& cmd0 = op->m_commands[cmd_id - 1];
+            if (cmd0.m_cmdType != ActionLog::READ_MEMORY && cmd0.m_cmdType != ActionLog::WRITE_MEMORY) continue;
+            ActionLog::Command& cmd1 = op->m_commands[cmd_id - 0];
+            if (cmd1.m_cmdType != ActionLog::MEMORY_VALUE) continue;
+
+            int memory_location = cmd0.m_location;
+
+            if (safe_to_remove.find(memory_location) != safe_to_remove.end() &&
+                safe_to_remove[memory_location] == true) {
+
+                // Mark the operation for deletions.
+                printf(".");
+                cmd0.m_cmdType = cmd1.m_cmdType = static_cast<ActionLog::CommandType>(-1);
+            }
+        }
+    }
+
+    RemoveEmptyOperations();
+}
 
 void TracePreprocess::RemoveEmptyReadWrites() {
 	int num_ops = m_log->maxEventActionId()  + 1;

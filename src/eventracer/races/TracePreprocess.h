@@ -19,13 +19,28 @@
 #define TRACEPREPROCESS_H_
 
 #include "ActionLog.h"
+#include "StringSet.h"
 
 class TracePreprocess {
 public:
-	TracePreprocess(ActionLog* log) : m_log(log) {}
+    TracePreprocess(ActionLog* log, const StringSet* vars, const StringSet* values)
+        : m_log(log),
+          m_vars(vars),
+          m_values(values) {}
+
 	virtual ~TracePreprocess() {}
 
 	// Remove patterns:
+
+    // write x [read|write x...]
+    // x is always written to by an operation before being read
+    void RemoveGlobalLocals();
+
+    //   read x value A write x value A+
+    // since they are likely incrementors of the form x++ which commute
+    // this is safe to remove if a value is ONLY used for incrementation and never branched on
+    void RemovePureIncrementation();
+
 	//   read x value A write x value A
 	// since they are likely lazy writes of the type:   x = x || expr.
 	void RemoveEmptyReadWrites();
@@ -41,6 +56,8 @@ private:
 	void RemoveEmptyOperations();
 
 	ActionLog* m_log;
+    const StringSet* m_vars;
+    const StringSet* m_values;
 };
 
 #endif /* TRACEPREPROCESS_H_ */
