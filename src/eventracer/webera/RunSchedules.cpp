@@ -243,7 +243,9 @@ typedef struct EATEntry_t {
                ExecutableSchedule executable_schedule,
                std::tr1::shared_ptr<TraceReorder> reorder,
                const std::string& origin,
-               int depth)
+               int depth,
+               int first_race_index,
+               int second_race_index)
         : base_race_output_dir(base_race_output_dir)
         , race_id(race_id)
         , schedule_suffix(schedule_suffix)
@@ -251,6 +253,8 @@ typedef struct EATEntry_t {
         , reorder(reorder)
         , origin(origin)
         , depth(depth)
+        , first_race_index(first_race_index)
+        , second_race_index(second_race_index)
     {
     }
 
@@ -261,6 +265,8 @@ typedef struct EATEntry_t {
     std::tr1::shared_ptr<TraceReorder> reorder;
     std::string origin;
     int depth;
+    int first_race_index;
+    int second_race_index;
 
 } EATEntry;
 
@@ -360,6 +366,7 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
     int mini_sleep_set_pruning = 0;
     int conflict_reversal_dependency_pruning = 0;
     int same_state_reversal_opt = 0;
+    std::vector<size_t> successful_schedules_depth;
 
     std::vector<State*> stack;
     stack.reserve(5000);
@@ -372,7 +379,7 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
     ExecutableSchedule init_executable_schedule = init_reorder->GetSchedule();
     Schedule init_schedule = init_reorder->RemoveSpecialMarkers(init_executable_schedule);
 
-    EATEntry init_eat(initial_base_dir, -1, init_schedule, init_executable_schedule, init_reorder, "", 0);
+    EATEntry init_eat(initial_base_dir, -1, init_schedule, init_executable_schedule, init_reorder, "", 0, -1, -1);
 
     State* initial_state = new State();
     initial_state->name = "";
@@ -421,6 +428,10 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
 
                 if (next_eat->race_id != -1) {
                     ++successful_schedules;
+                    while (successful_schedules_depth.size() <= next_eat->depth) {
+                        successful_schedules_depth.push_back(0);
+                    }
+                    ++(successful_schedules_depth.at(next_eat->depth));
                 }
 
                 std::tr1::shared_ptr<TraceReorder> new_reorder = std::tr1::shared_ptr<TraceReorder>(new TraceReorder());
@@ -457,8 +468,8 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
                     State* new_state = new State();
                     new_state->name = new_name;
 
-                    new_state->m_race_first = (i == next_eat->reorder->get_first_index());
-                    new_state->m_race_second = (i == next_eat->reorder->get_second_index());
+                    new_state->m_race_first = (i == next_eat->first_race_index);
+                    new_state->m_race_second = (i == next_eat->second_race_index);
 
                     new_state->schedule = state->schedule;
                     new_state->schedule.push_back(new_event_id);
@@ -536,7 +547,16 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
 
                     ScheduleSuffix pending_schedule_suffix(pending_schedule.begin() + eventToStackIndex[race.m_event1]-1, pending_schedule.end());
 
-                    EATEntry pending_entry(executed_base_dir, race_id, pending_schedule_suffix, pending_executable_schedule, new_reorder, new_name, current_depth+1);
+                    EATEntry pending_entry(executed_base_dir,
+                                           race_id,
+                                           pending_schedule_suffix,
+                                           pending_executable_schedule,
+                                           new_reorder,
+                                           new_name,
+                                           current_depth+1,
+                                           new_reorder->get_first_index(),
+                                           new_reorder->get_second_index());
+
                     EATMerge(&stack, eventToStackIndex[race.m_event1]-1, pending_entry);
 
                 }
@@ -566,6 +586,11 @@ void explore(const char* initial_schedule, const char* initial_base_dir) {
     printf("Statistics: mini-sleep-set-pruning: %d\n", mini_sleep_set_pruning);
     printf("Statistics: conflict-reversal-dependency-pruning: %d\n", conflict_reversal_dependency_pruning);
     printf("Statistics: same-state-reversal-pruning: %d\n", same_state_reversal_opt);
+    printf("Statistics: schedules successful by depth: ");
+    for (size_t i = 1; i < successful_schedules_depth.size(); ++i) {
+        printf("%d: %d  ", i, successful_schedules_depth.at(i));
+    }
+    printf("\n");
     printf("Tried %d schedules. %d generated, %d successful\n",
             all_schedules, successful_reverses, successful_schedules);
 
