@@ -92,19 +92,25 @@ void TracePreprocess::RemovePureIncrementation() {
         if (m_log->event_action(op_id).m_commands.empty()) continue;  // Avoid adding event actions.
         ActionLog::EventAction* op = m_log->mutable_event_action(op_id);
 
-        for (size_t cmd_id = 3; cmd_id < op->m_commands.size(); ++cmd_id) {
-            ActionLog::Command& cmd0 = op->m_commands[cmd_id - 3];
+        for (size_t cmd_id = 1; cmd_id < op->m_commands.size(); ++cmd_id) {
+            ActionLog::Command& cmd0 = op->m_commands[cmd_id - 1];
             if (cmd0.m_cmdType != ActionLog::READ_MEMORY) continue;
-            ActionLog::Command& cmd1 = op->m_commands[cmd_id - 2];
+            ActionLog::Command& cmd1 = op->m_commands[cmd_id - 0];
             if (cmd1.m_cmdType != ActionLog::MEMORY_VALUE) continue;
 
             // if we see a read, then it must be followed by a write on the same location
 
-            ActionLog::Command& cmd2 = op->m_commands[cmd_id - 1];
-            ActionLog::Command& cmd3 = op->m_commands[cmd_id - 0];
+            if (cmd_id+2 >= op->m_commands.size()) {
+                // no write, mark as invalid
+                safe_to_remove[cmd0.m_location] = false;
+            }
+
+            ActionLog::Command& cmd2 = op->m_commands[cmd_id + 1];
+            ActionLog::Command& cmd3 = op->m_commands[cmd_id + 2];
             if (cmd2.m_cmdType != ActionLog::WRITE_MEMORY ||
                     cmd3.m_cmdType != ActionLog::MEMORY_VALUE ||
                     cmd2.m_location != cmd0.m_location) {
+                // no write or the is not to the same memory location
                 safe_to_remove[cmd0.m_location] = false;
                 continue;
             }
@@ -159,7 +165,6 @@ void TracePreprocess::RemovePureIncrementation() {
                 safe_to_remove[memory_location] == true) {
 
                 // Mark the operation for deletions.
-                printf(".");
                 cmd0.m_cmdType = cmd1.m_cmdType = static_cast<ActionLog::CommandType>(-1);
             }
         }

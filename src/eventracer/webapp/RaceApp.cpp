@@ -179,8 +179,8 @@ RaceApp::RaceApp(int64 app_id, const std::string& actionLogFile, bool can_drop_n
     if (FLAGS_use_race_filters) {
         preprocess.RemoveGlobalLocals();
         preprocess.RemovePureIncrementation();
-        preprocess.RemoveEmptyReadWrites();
-        preprocess.RemoveNopWrites();
+        //preprocess.RemoveEmptyReadWrites();
+        //preprocess.RemoveNopWrites();
         //preprocess.RemoveUpdatesInSameMethod();
     }
 
