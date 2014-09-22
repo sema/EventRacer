@@ -21,6 +21,37 @@
 #include <sstream>
 #include <map>
 
+void TracePreprocess::IgnoreLocation(const std::string& location) {
+
+    if (location.compare("") == 0) {
+        return;
+    }
+
+    int num_ops = m_log->maxEventActionId()  + 1;
+
+    for (int op_id = 0; op_id < num_ops; ++op_id) {
+        if (m_log->event_action(op_id).m_commands.empty()) continue;  // Avoid adding event actions.
+        ActionLog::EventAction* op = m_log->mutable_event_action(op_id);
+
+        for (size_t cmd_id = 1; cmd_id < op->m_commands.size(); ++cmd_id) {
+            ActionLog::Command& cmd0 = op->m_commands[cmd_id - 1];
+            if (cmd0.m_cmdType != ActionLog::READ_MEMORY && cmd0.m_cmdType != ActionLog::WRITE_MEMORY) continue;
+            ActionLog::Command& cmd1 = op->m_commands[cmd_id - 0];
+            if (cmd1.m_cmdType != ActionLog::MEMORY_VALUE) continue;
+
+            int memory_location = cmd0.m_location;
+            std::string memory_location_str = m_vars->getString(memory_location);
+
+            if (memory_location_str.compare(location) == 0) {
+                // Mark the operation for deletions.
+                cmd0.m_cmdType = cmd1.m_cmdType = static_cast<ActionLog::CommandType>(-1);
+            }
+        }
+    }
+
+    RemoveEmptyOperations();
+}
+
 void TracePreprocess::RemoveGlobalLocals() {
     std::map<int, int> safe_to_remove;
 

@@ -18,6 +18,8 @@
 #ifndef TRACEPREPROCESS_H_
 #define TRACEPREPROCESS_H_
 
+#include <string>
+
 #include "ActionLog.h"
 #include "StringSet.h"
 
@@ -31,6 +33,9 @@ public:
 	virtual ~TracePreprocess() {}
 
 	// Remove patterns:
+
+    // Ignores specific locations declared through the commandline.
+    void IgnoreLocation(const std::string& location);
 
     // write x [read|write x...]
     // x is always written to by an operation before being read

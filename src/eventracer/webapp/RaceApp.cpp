@@ -41,9 +41,12 @@
 #include <algorithm>
 #include <utility>
 #include <queue>
+#include <sstream>
 
 DEFINE_bool(use_race_filters, true,
         "Race filters removes races on commuting operations.");
+DEFINE_string(race_filter_ignore_loc, "",
+        "Ignore specific locations from the analysis. Multiple locations are given as a comma separated list.");
 
 using std::string;
 
@@ -177,6 +180,13 @@ RaceApp::RaceApp(int64 app_id, const std::string& actionLogFile, bool can_drop_n
     TracePreprocess preprocess(&m_actions, &m_vars, &m_memValues);
 
     if (FLAGS_use_race_filters) {
+
+        std::stringstream ignored_locs(FLAGS_race_filter_ignore_loc);
+        std::string ignored_loc;
+        while (std::getline(ignored_locs, ignored_loc, ',')) {
+            preprocess.IgnoreLocation(ignored_loc);
+        }
+
         preprocess.RemoveGlobalLocals();
         preprocess.RemovePureIncrementation();
         //preprocess.RemoveEmptyReadWrites();
