@@ -37,6 +37,9 @@ public:
     // Ignores specific locations declared through the commandline.
     void IgnoreLocation(const std::string& location);
 
+    // Filter commutative lazy init of pattern x = x || ?
+    void RemoveCommutativeLazyInit(const std::string& location);
+
     // write x [read|write x...]
     // x is always written to by an operation before being read
     void RemoveGlobalLocals();
@@ -45,6 +48,9 @@ public:
     // since they are likely incrementors of the form x++ which commute
     // this is safe to remove if a value is ONLY used for incrementation and never branched on
     void RemovePureIncrementation();
+
+    // removes reads and writes where only one value is ever observed
+    void RemoveConstantValue();
 
 	//   read x value A write x value A
 	// since they are likely lazy writes of the type:   x = x || expr.

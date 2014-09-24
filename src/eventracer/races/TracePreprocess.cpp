@@ -21,6 +21,51 @@
 #include <sstream>
 #include <map>
 
+// Filter commutative lazy init of pattern x = x || ?
+void TracePreprocess::RemoveCommutativeLazyInit(const std::string& location) {
+
+    int num_ops = m_log->maxEventActionId()  + 1;
+    for (int op_id = 0; op_id < num_ops; ++op_id) {
+
+        if (m_log->event_action(op_id).m_commands.empty()) continue;  // Avoid adding event actions.
+        ActionLog::EventAction* op = m_log->mutable_event_action(op_id);
+
+        for (size_t cmd_id = 3; cmd_id < op->m_commands.size(); ++cmd_id) {
+
+            ActionLog::Command& cmd0 = op->m_commands[cmd_id - 3];
+            if (cmd0.m_cmdType != ActionLog::READ_MEMORY) continue;
+            ActionLog::Command& cmd1 = op->m_commands[cmd_id - 2];
+            if (cmd1.m_cmdType != ActionLog::MEMORY_VALUE) continue;
+
+            ActionLog::Command& cmd2 = op->m_commands[cmd_id - 1];
+            if (cmd2.m_cmdType != ActionLog::WRITE_MEMORY) continue;
+            if (cmd2.m_location != cmd0.m_location) continue;
+            ActionLog::Command& cmd3 = op->m_commands[cmd_id - 0];
+            if (cmd3.m_cmdType != ActionLog::MEMORY_VALUE) continue;
+            if (cmd3.m_location != cmd1.m_location) continue;
+
+            int memory_location = cmd0.m_location;
+            std::string memory_location_str = m_vars->getString(memory_location);
+
+            if (memory_location_str.find(location) == std::string::npos) continue;
+
+            std::string memory_value = m_values->getString(cmd1.m_location);
+
+            if (memory_value.compare("undefined") == 0 ||
+                    memory_value.compare("false") == 0 ||
+                    memory_value.compare("null") == 0 ||
+                    memory_value.compare("\"\"") == 0 ||
+                    memory_value.compare("0") == 0) continue;
+
+            // Mark the write operation for deletion, such that it commutes with any other non-writing operation
+            cmd2.m_cmdType = cmd3.m_cmdType = static_cast<ActionLog::CommandType>(-1);
+        }
+    }
+
+    RemoveEmptyOperations();
+
+}
+
 void TracePreprocess::IgnoreLocation(const std::string& location) {
 
     if (location.compare("") == 0) {
@@ -42,7 +87,7 @@ void TracePreprocess::IgnoreLocation(const std::string& location) {
             int memory_location = cmd0.m_location;
             std::string memory_location_str = m_vars->getString(memory_location);
 
-            if (memory_location_str.compare(location) == 0) {
+            if (memory_location_str.find(location) != std::string::npos) {
                 // Mark the operation for deletions.
                 cmd0.m_cmdType = cmd1.m_cmdType = static_cast<ActionLog::CommandType>(-1);
             }
@@ -63,16 +108,18 @@ void TracePreprocess::RemoveGlobalLocals() {
         if (m_log->event_action(op_id).m_commands.empty()) continue;  // Avoid adding event actions.
         ActionLog::EventAction* op = m_log->mutable_event_action(op_id);
 
-        for (size_t cmd_id = 1; cmd_id < op->m_commands.size(); ++cmd_id) {
-            ActionLog::Command& cmd0 = op->m_commands[cmd_id - 1];
+        for (size_t cmd_id = 0; cmd_id < op->m_commands.size(); ++cmd_id) {
+            ActionLog::Command& cmd0 = op->m_commands[cmd_id];
             if (cmd0.m_cmdType != ActionLog::READ_MEMORY && cmd0.m_cmdType != ActionLog::WRITE_MEMORY) continue;
-            ActionLog::Command& cmd1 = op->m_commands[cmd_id - 0];
-            if (cmd1.m_cmdType != ActionLog::MEMORY_VALUE) continue;
+            //ActionLog::Command& cmd1 = op->m_commands[cmd_id - 0];
+            //if (cmd1.m_cmdType != ActionLog::MEMORY_VALUE) continue;
 
             int memory_location = cmd0.m_location;
             const char* memory_location_char = m_vars->getString(memory_location);
 
-            if (*memory_location_char != 'O' && *memory_location_char != 'A') continue; // only analyze objects and arrays
+            if (*memory_location_char != 'O' &&
+                    *memory_location_char != 'A' &&
+                    *memory_location_char != 'W') continue; // only analyze objects and arrays and globals (Window)
 
             if (cmd0.m_cmdType == ActionLog::READ_MEMORY &&
                     (safe_to_remove.find(memory_location) == safe_to_remove.end() ||
@@ -92,11 +139,9 @@ void TracePreprocess::RemoveGlobalLocals() {
         if (m_log->event_action(op_id).m_commands.empty()) continue;  // Avoid adding event actions.
         ActionLog::EventAction* op = m_log->mutable_event_action(op_id);
 
-        for (size_t cmd_id = 1; cmd_id < op->m_commands.size(); ++cmd_id) {
-            ActionLog::Command& cmd0 = op->m_commands[cmd_id - 1];
+        for (size_t cmd_id = 0; cmd_id < op->m_commands.size(); ++cmd_id) {
+            ActionLog::Command& cmd0 = op->m_commands[cmd_id];
             if (cmd0.m_cmdType != ActionLog::READ_MEMORY && cmd0.m_cmdType != ActionLog::WRITE_MEMORY) continue;
-            ActionLog::Command& cmd1 = op->m_commands[cmd_id - 0];
-            if (cmd1.m_cmdType != ActionLog::MEMORY_VALUE) continue;
 
             int memory_location = cmd0.m_location;
 
@@ -104,7 +149,14 @@ void TracePreprocess::RemoveGlobalLocals() {
                 safe_to_remove[memory_location] != -1) {
 
                 // Mark the operation for deletions.
-                cmd0.m_cmdType = cmd1.m_cmdType = static_cast<ActionLog::CommandType>(-1);
+                cmd0.m_cmdType = static_cast<ActionLog::CommandType>(-1);
+
+                if (cmd_id+1 < op->m_commands.size()) {
+                    ActionLog::Command& cmd1 = op->m_commands[cmd_id+1];
+                    if (cmd1.m_cmdType != ActionLog::MEMORY_VALUE) continue;
+
+                    cmd1.m_cmdType = static_cast<ActionLog::CommandType>(-1);
+                }
             }
         }
     }
@@ -149,16 +201,15 @@ void TracePreprocess::RemovePureIncrementation() {
             int memory_location = cmd0.m_location;
             const char* memory_location_char = m_vars->getString(memory_location);
 
-            // only analyze objects, arrays, and JS activation objects
+            // only analyze objects, arrays, globals (Window) and JS activation objects
             if (*memory_location_char != 'O' &&
                     *memory_location_char != 'A' &&
+                    *memory_location_char != 'W' &&
                     *memory_location_char != 'J') continue;
 
             if (safe_to_remove.find(memory_location) == safe_to_remove.end()) {
                 safe_to_remove[memory_location] = true;
             }
-
-            continue;
 
             if (safe_to_remove[memory_location] == true) {
 
@@ -194,6 +245,65 @@ void TracePreprocess::RemovePureIncrementation() {
 
             if (safe_to_remove.find(memory_location) != safe_to_remove.end() &&
                 safe_to_remove[memory_location] == true) {
+
+                // Mark the operation for deletions.
+                cmd0.m_cmdType = cmd1.m_cmdType = static_cast<ActionLog::CommandType>(-1);
+            }
+        }
+    }
+
+    RemoveEmptyOperations();
+}
+
+void TracePreprocess::RemoveConstantValue() {
+
+    std::map<int, int> safe_to_remove;
+
+    int num_ops = m_log->maxEventActionId()  + 1;
+
+    // Find memory locations which are safe for removal
+
+    for (int op_id = 0; op_id < num_ops; ++op_id) {
+        if (m_log->event_action(op_id).m_commands.empty()) continue;  // Avoid adding event actions.
+        ActionLog::EventAction* op = m_log->mutable_event_action(op_id);
+
+        for (size_t cmd_id = 1; cmd_id < op->m_commands.size(); ++cmd_id) {
+            ActionLog::Command& cmd0 = op->m_commands[cmd_id - 1];
+            if (cmd0.m_cmdType != ActionLog::READ_MEMORY && cmd0.m_cmdType != ActionLog::WRITE_MEMORY) continue;
+            ActionLog::Command& cmd1 = op->m_commands[cmd_id - 0];
+            if (cmd1.m_cmdType != ActionLog::MEMORY_VALUE) continue;
+
+            // if we see a read, then it must be followed by a write on the same location
+
+            int memory_location = cmd0.m_location;
+            int memory_value = cmd1.m_location;
+
+            if (safe_to_remove.find(memory_location) != safe_to_remove.end() &&
+                    safe_to_remove[memory_location] != memory_value) {
+                safe_to_remove[memory_location] = -1;
+                continue;
+            }
+
+            safe_to_remove[memory_location] = memory_value;
+        }
+    }
+
+    // Remove
+
+    for (int op_id = 0; op_id < num_ops; ++op_id) {
+        if (m_log->event_action(op_id).m_commands.empty()) continue;  // Avoid adding event actions.
+        ActionLog::EventAction* op = m_log->mutable_event_action(op_id);
+
+        for (size_t cmd_id = 1; cmd_id < op->m_commands.size(); ++cmd_id) {
+            ActionLog::Command& cmd0 = op->m_commands[cmd_id - 1];
+            if (cmd0.m_cmdType != ActionLog::READ_MEMORY && cmd0.m_cmdType != ActionLog::WRITE_MEMORY) continue;
+            ActionLog::Command& cmd1 = op->m_commands[cmd_id - 0];
+            if (cmd1.m_cmdType != ActionLog::MEMORY_VALUE) continue;
+
+            int memory_location = cmd0.m_location;
+
+            if (safe_to_remove.find(memory_location) != safe_to_remove.end() &&
+                safe_to_remove[memory_location] != -1) {
 
                 // Mark the operation for deletions.
                 cmd0.m_cmdType = cmd1.m_cmdType = static_cast<ActionLog::CommandType>(-1);

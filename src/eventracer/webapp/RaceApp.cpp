@@ -47,6 +47,8 @@ DEFINE_bool(use_race_filters, true,
         "Race filters removes races on commuting operations.");
 DEFINE_string(race_filter_ignore_loc, "",
         "Ignore specific locations from the analysis. Multiple locations are given as a comma separated list.");
+DEFINE_string(commutative_lazy_init_locs, "",
+        "Filter commutative operations, caused by lazy init of the form of x = x || ? on the location x, from the analysis. The given location must be a suffix of the matched location. Multiple locations are given as a comma separated list.");
 
 using std::string;
 
@@ -187,8 +189,15 @@ RaceApp::RaceApp(int64 app_id, const std::string& actionLogFile, bool can_drop_n
             preprocess.IgnoreLocation(ignored_loc);
         }
 
+        std::stringstream commutative_lazy_init_locs(FLAGS_commutative_lazy_init_locs);
+        std::string commutative_lazy_init_loc;
+        while (std::getline(commutative_lazy_init_locs, commutative_lazy_init_loc, ',')) {
+            preprocess.RemoveCommutativeLazyInit(commutative_lazy_init_loc);
+        }
+
         preprocess.RemoveGlobalLocals();
         preprocess.RemovePureIncrementation();
+        preprocess.RemoveConstantValue();
         //preprocess.RemoveEmptyReadWrites();
         //preprocess.RemoveNopWrites();
         //preprocess.RemoveUpdatesInSameMethod();
