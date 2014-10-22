@@ -258,6 +258,7 @@ void TracePreprocess::RemovePureIncrementation() {
 void TracePreprocess::RemoveConstantValue() {
 
     std::map<int, int> safe_to_remove;
+    std::map<int, bool> has_skipped_first_write;
 
     int num_ops = m_log->maxEventActionId()  + 1;
 
@@ -296,7 +297,7 @@ void TracePreprocess::RemoveConstantValue() {
 
         for (size_t cmd_id = 1; cmd_id < op->m_commands.size(); ++cmd_id) {
             ActionLog::Command& cmd0 = op->m_commands[cmd_id - 1];
-            if (cmd0.m_cmdType != ActionLog::READ_MEMORY && cmd0.m_cmdType != ActionLog::WRITE_MEMORY) continue;
+            if (cmd0.m_cmdType != ActionLog::WRITE_MEMORY) continue;
             ActionLog::Command& cmd1 = op->m_commands[cmd_id - 0];
             if (cmd1.m_cmdType != ActionLog::MEMORY_VALUE) continue;
 
@@ -305,8 +306,12 @@ void TracePreprocess::RemoveConstantValue() {
             if (safe_to_remove.find(memory_location) != safe_to_remove.end() &&
                 safe_to_remove[memory_location] != -1) {
 
-                // Mark the operation for deletions.
-                cmd0.m_cmdType = cmd1.m_cmdType = static_cast<ActionLog::CommandType>(-1);
+                if (has_skipped_first_write.find(memory_location) == has_skipped_first_write.end()) {
+                    has_skipped_first_write[memory_location] = true;
+                } else {
+                    // Mark the operation for deletions.
+                    cmd0.m_cmdType = cmd1.m_cmdType = static_cast<ActionLog::CommandType>(-1);
+                }
             }
         }
     }

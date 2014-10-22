@@ -49,7 +49,7 @@ public:
     // this is safe to remove if a value is ONLY used for incrementation and never branched on
     void RemovePureIncrementation();
 
-    // removes reads and writes where only one value is ever observed
+    // removes writes (except the first write) where only one value is ever observed
     void RemoveConstantValue();
 
 	//   read x value A write x value A
