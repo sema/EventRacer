@@ -27,6 +27,8 @@
 DEFINE_string(port, "8000", "Port where the web server listens.");
 DECLARE_string(dot_temp_dir);
 
+DEFINE_bool(drop_node_analysis, true, "Enable or disable the drop node analysis.");
+
 namespace {
 
 RaceApp* race_app;
@@ -105,7 +107,7 @@ int main(int argc, char* argv[]) {
 	}
 
 	// Creating a race app.
-	race_app = new RaceApp(0, argv[1], true);
+    race_app = new RaceApp(0, argv[1], FLAGS_drop_node_analysis);
 
 	// Start the web server.
 	ctx = mg_start(&callbacks, NULL, options);
